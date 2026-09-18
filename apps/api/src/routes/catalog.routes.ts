@@ -15,7 +15,11 @@ export async function catalogRoutes(app: FastifyInstance) {
   app.get("/products/suggest", async (req, reply) => {
     const querySchema = z.object({ q: z.string().default("") });
     const { q } = querySchema.parse(req.query);
-    const companyId = (req as any).companyId as string; // vem do middleware de auth
+    // vem do middleware de auth (`middleware/auth.ts`) — antes lia um
+    // `req.companyId` que nunca existiu; sem isso a busca ignorava a
+    // empresa e misturava catálogo entre clientes (achado testando o
+    // bootstrap de auth pela primeira vez, 18/09).
+    const companyId = req.usuarioAtual!.companyId;
 
     const { completas, prefixoAberto } = separarTermos(q);
     if (completas.length === 0 && !prefixoAberto) {

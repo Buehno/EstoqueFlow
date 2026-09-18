@@ -1,6 +1,5 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { randomBytes, scryptSync } from "node:crypto";
 import {
   PAPEIS,
   PERMISSAO_CHAVES,
@@ -10,6 +9,7 @@ import {
   type PermissaoOverrides,
   type Role,
 } from "../lib/permissoes.js";
+import { gerarSenhaProvisoria, hashSenha } from "../lib/senha.js";
 
 /**
  * Página única "Equipe" (pedido de 18/09): Owner/Gestor/Administrador
@@ -17,8 +17,8 @@ import {
  * permissões individuais — tudo pelas mesmas rotas, sem tela separada.
  *
  * Autorização em duas camadas, sempre em cima do usuário autenticado
- * (`req.usuarioAtual`, populado pelo middleware de auth — a escrever junto
- * com o bootstrap do Fastify):
+ * (`req.usuarioAtual`, populado por `middleware/auth.ts`, registrado antes
+ * dessas rotas em `app.ts`):
  *   1. `podeAbrirPainelEquipe` — precisa ter a permissão `equipeGerenciar`
  *      resolvida (papel ou override) pra sequer listar a equipe.
  *   2. `podeGerenciar(quem, alvo)` — checada de novo por ação (criar com um
@@ -35,17 +35,6 @@ const overridesSchema = z
   .partial();
 
 const roleSchema = z.enum(["OWNER", "GESTOR", "ADMINISTRADOR", "OPERADOR"]);
-
-function gerarSenhaProvisoria(): string {
-  // 8 caracteres alfanuméricos, fácil de ditar por telefone/whatsapp.
-  return randomBytes(6).toString("base64url").slice(0, 8);
-}
-
-function hashSenha(senha: string): string {
-  const salt = randomBytes(16).toString("hex");
-  const hash = scryptSync(senha, salt, 64).toString("hex");
-  return `${salt}:${hash}`;
-}
 
 interface UsuarioAutenticado {
   id: string;
