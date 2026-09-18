@@ -1,0 +1,133 @@
+// Esquema mínimo para o módulo de propostas + catálogo, reconstruído a
+// partir da documentação (`estoqueflow/entrega-v1.md`,
+// `estoqueflow/modulo-propostas.md`). O restante dos módulos (PDV,
+// movimentações, inventário, alertas, equipe/permissões) entra em seguida.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Company {
+  id        String   @id @default(uuid())
+  name      String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  products  Product[]
+  proposals Proposal[]
+  users     User[]
+
+  @@map("companies")
+}
+
+model Product {
+  id          String   @id @default(uuid())
+  companyId   String   @map("company_id")
+  company     Company  @relation(fields: [companyId], references: [id])
+  sku         String?
+  description String
+  size        String?  @map("size")
+  unit        String?  // UN, MT, CM, KG, L...
+  searchText  String?  @map("search_text") // mantido por trigger no banco
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  proposalItems ProposalItem[]
+
+  @@index([companyId])
+  @@map("products")
+}
+
+model Proposal {
+  id          String   @id @default(uuid())
+  companyId   String   @map("company_id")
+  company     Company  @relation(fields: [companyId], references: [id])
+  number      Int      @default(autoincrement())
+  clientName  String   @default("") @map("client_name")
+  clientPhone String?  @map("client_phone")
+  clientEmail String?  @map("client_email")
+  local       String?
+  scopeTitle  String   @default("") @map("scope_title")
+  status      String   @default("RASCUNHO")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  items ProposalItem[]
+
+  @@index([companyId])
+  @@map("proposals")
+}
+
+model ProposalItem {
+  id              String    @id @default(uuid())
+  proposalId      String    @map("proposal_id")
+  proposal        Proposal  @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  position        Int       @default(0)
+  quantityText    String    @default("01") @map("quantity_text")
+  description     String    @default("")
+  unitPrice       Decimal   @default(0) @map("unit_price") @db.Decimal(14, 2)
+  total           Decimal   @default(0) @db.Decimal(14, 2)
+  productId       String?   @map("product_id")
+  product         Product?  @relation(fields: [productId], references: [id])
+
+  @@index([proposalId])
+  @@map("proposal_items")
+}
+
+// ---------------------------------------------------------------------
+// Equipe e permissões (pedido de 18/09) — página única de gestão de
+// pessoas: papel de cada um + permissões individuais que sobrescrevem o
+// padrão do papel. Ver `../src/lib/permissoes.ts` pra regra de resolução
+// e hierarquia (quem pode editar/excluir quem).
+// ---------------------------------------------------------------------
+
+enum Role {
+  OWNER          // Proprietário — acesso total, não pode ser editado/excluído por ninguém
+  GESTOR         // Gestora — acesso completo operacional + equipe inteira
+  ADMINISTRADOR  // Administradora — dia a dia + relatórios resumidos + gerencia Operadores
+  OPERADOR       // Operadora — só operacional, sem equipe/relatórios/alertas
+}
+
+model User {
+  id                 String    @id @default(uuid())
+  companyId          String    @map("company_id")
+  company            Company   @relation(fields: [companyId], references: [id])
+  name               String
+  email              String    @unique
+  passwordHash       String    @map("password_hash")
+  role               Role      @default(OPERADOR)
+  active             Boolean   @default(true)
+  mustChangePassword Boolean   @default(true) @map("must_change_password")
+  permissions        UserPermission?
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  @@index([companyId])
+  @@map("users")
+}
+
+// Sobrescritas por pessoa. Cada campo é opcional (null = "usa o padrão do
+// papel"); true/false = liga/desliga explícito para essa pessoa,
+// independente do papel dela. Ver `PERMISSOES` em `permissoes.ts` pra lista
+// canônica das chaves e seus rótulos em pt-BR.
+model UserPermission {
+  id     String @id @default(uuid())
+  userId String @unique @map("user_id")
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  estoqueMovimentar      Boolean? @map("estoque_movimentar")
+  balcaoVender           Boolean? @map("balcao_vender")
+  propostasGerenciar     Boolean? @map("propostas_gerenciar")
+  relatoriosVerResumido  Boolean? @map("relatorios_ver_resumido")
+  relatoriosVerCompleto  Boolean? @map("relatorios_ver_completo")
+  alertasVer             Boolean? @map("alertas_ver")
+  alertasGerenciarRegras Boolean? @map("alertas_gerenciar_regras")
+  inventarioGerenciar    Boolean? @map("inventario_gerenciar")
+  equipeGerenciar        Boolean? @map("equipe_gerenciar")
+  configuracoesEmpresa   Boolean? @map("configuracoes_empresa")
+
+  @@map("user_permissions")
+}
