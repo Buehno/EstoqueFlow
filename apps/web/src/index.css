@@ -1,0 +1,165 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ══════════════════════════════════════════════════════════════════════════
+   EstoqueFlow — tokens semânticos
+   Um par de temas, uma escala. Nenhum hex solto nas telas.
+   ══════════════════════════════════════════════════════════════════════════ */
+@layer base {
+  :root {
+    --c-bg: 247 249 252;
+    --c-surface: 255 255 255;
+    --c-raised: 255 255 255;
+    --c-line: 226 232 240;
+    --c-ink: 15 23 42;
+    --c-muted: 71 85 105;
+    --c-faint: 148 163 184;
+
+    --c-brand: 2 132 199;
+    --c-brand-soft: 224 242 254;
+    --c-brand-ink: 255 255 255;
+
+    --c-ok: 22 163 74;
+    --c-warn: 202 138 4;
+    --c-danger: 220 38 38;
+    --c-info: 79 70 229;
+
+    color-scheme: light;
+  }
+
+  .dark {
+    --c-bg: 8 13 23;
+    --c-surface: 15 23 38;
+    --c-raised: 22 32 50;
+    --c-line: 39 52 74;
+    --c-ink: 236 243 255;
+    --c-muted: 160 176 200;
+    --c-faint: 111 130 158;
+
+    --c-brand: 56 189 248;
+    --c-brand-soft: 12 45 68;
+    --c-brand-ink: 6 20 34;
+
+    --c-ok: 52 211 153;
+    --c-warn: 250 204 21;
+    --c-danger: 248 113 113;
+    --c-info: 129 140 248;
+
+    color-scheme: dark;
+  }
+
+  * {
+    @apply border-line;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-bg text-ink font-sans antialiased;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'tnum';
+  }
+
+  ::selection {
+    background: rgb(var(--c-brand) / 0.25);
+  }
+
+  /* foco visível e consistente em toda a aplicação */
+  :focus-visible {
+    outline: 2px solid rgb(var(--c-brand));
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgb(var(--c-line));
+    border-radius: 999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgb(var(--c-faint));
+    background-clip: content-box;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-2xl border border-line bg-surface shadow-card;
+  }
+
+  .label {
+    @apply mb-1.5 block text-[13px] font-medium text-muted;
+  }
+
+  .field {
+    @apply h-11 w-full rounded-xl border border-line bg-raised px-3.5 text-[15px] text-ink
+           placeholder:text-faint transition-colors duration-150
+           hover:border-faint focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30
+           disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .field-sm {
+    @apply h-9 rounded-lg px-2.5 text-sm;
+  }
+
+  .btn {
+    @apply inline-flex h-11 min-w-[44px] select-none items-center justify-center gap-2 rounded-xl px-4
+           text-[15px] font-semibold transition-all duration-150 active:scale-[.985]
+           disabled:pointer-events-none disabled:opacity-45;
+  }
+  .btn-primary {
+    @apply btn bg-brand text-brand-ink hover:brightness-110;
+  }
+  .btn-ghost {
+    @apply btn border border-line bg-raised text-ink hover:border-faint hover:bg-line/40;
+  }
+  .btn-danger {
+    @apply btn bg-danger text-white hover:brightness-110;
+  }
+  .btn-sm {
+    @apply h-9 rounded-lg px-3 text-sm;
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold;
+  }
+
+  .th {
+    @apply whitespace-nowrap px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-faint;
+  }
+  .td {
+    @apply whitespace-nowrap px-4 py-3 text-[14px] text-ink;
+  }
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .skeleton {
+    @apply relative overflow-hidden rounded-lg bg-line/60;
+  }
+  .skeleton::after {
+    content: '';
+    @apply absolute inset-0 -translate-x-full;
+    background: linear-gradient(90deg, transparent, rgb(var(--c-faint) / 0.18), transparent);
+    animation: shimmer 1.4s infinite;
+  }
+}

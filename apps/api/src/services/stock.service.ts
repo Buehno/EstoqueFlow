@@ -1,0 +1,378 @@
+import { Prisma } from '@prisma/client';
+import { prisma, D, nextNumber } from '../lib/prisma.js';
+import { badRequest, notFound, unprocessable } from '../lib/errors.js';
+import { enqueueStock, enqueueMovement } from './sync.service.js';
+
+type Tx = Prisma.TransactionClient;
+
+const ZERO = new Prisma.Decimal(0);
+
+export interface MoveInput {
+  companyId: string;
+  userId: string;
+  productId: string;
+  quantity: number;
+  unitCost?: number;
+  reason?: string;
+  document?: string;
+  notes?: string;
+  allowNegative?: boolean;
+}
+
+/** Busca (ou cria zerado) o saldo de um produto num depósito, com lock. */
+async function getOrCreateStock(tx: Tx, productId: string, warehouseId: string) {
+  const existing = await tx.stockItem.findUnique({
+    where: { productId_warehouseId: { productId, warehouseId } },
+  });
+  if (existing) return existing;
+  return tx.stockItem.create({ data: { productId, warehouseId, quantity: ZERO, avgCost: ZERO } });
+}
+
+/** Garante que produto e depósito pertencem à empresa do usuário. */
+async function assertScope(tx: Tx, companyId: string, productId: string, warehouseIds: string[]) {
+  const product = await tx.product.findFirst({ where: { id: productId, companyId } });
+  if (!product) throw notFound('Produto não encontrado nesta empresa.');
+  if (!product.active) throw unprocessable(`Produto "${product.name}" está inativo.`);
+
+  const ws = await tx.warehouse.findMany({
+    where: { id: { in: warehouseIds }, companyId, active: true },
+  });
+  if (ws.length !== new Set(warehouseIds).size) {
+    throw notFound('Depósito não encontrado ou inativo nesta empresa.');
+  }
+  return { product, warehouses: ws };
+}
+
+/**
+ * ENTRADA — soma ao depósito e recalcula o custo médio ponderado.
+ */
+export async function entrada(input: MoveInput & { warehouseId: string }) {
+  if (input.quantity <= 0) throw badRequest('A quantidade da entrada deve ser maior que zero.');
+
+  return prisma.$transaction(async (tx) => {
+    const { product } = await assertScope(tx, input.companyId, input.productId, [
+      input.warehouseId,
+    ]);
+
+    const stock = await getOrCreateStock(tx, input.productId, input.warehouseId);
+    const qty = D(input.quantity);
+    const cost = D(input.unitCost ?? Number(product.costPrice));
+
+    const newQty = stock.quantity.plus(qty);
+    // custo médio ponderado: (saldo*custoAtual + entrada*custoNovo) / saldoFinal
+    const newAvg = newQty.gt(0)
+      ? stock.quantity.mul(stock.avgCost).plus(qty.mul(cost)).div(newQty)
+      : cost;
+
+    const updated = await tx.stockItem.update({
+      where: { id: stock.id },
+      data: { quantity: newQty, avgCost: newAvg },
+    });
+
+    const number = await nextNumber(tx, input.companyId, 'movement');
+    const mov = await tx.movement.create({
+      data: {
+        companyId: input.companyId,
+        number,
+        type: 'ENTRADA',
+        productId: input.productId,
+        quantity: qty,
+        unitCost: cost,
+        toWarehouseId: input.warehouseId,
+        balanceTo: newQty,
+        reason: input.reason ?? 'Entrada de mercadoria',
+        document: input.document,
+        notes: input.notes,
+        userId: input.userId,
+      },
+      include: { product: true, toWarehouse: true, user: true },
+    });
+
+    await enqueueStock(tx, input.companyId, updated.id);
+    await enqueueMovement(tx, input.companyId, mov.id);
+    return mov;
+  });
+}
+
+/**
+ * SAÍDA — baixa do depósito. Bloqueia saldo negativo (salvo allowNegative).
+ */
+export async function saida(input: MoveInput & { warehouseId: string }) {
+  if (input.quantity <= 0) throw badRequest('A quantidade da saída deve ser maior que zero.');
+
+  return prisma.$transaction(async (tx) => {
+    const { product } = await assertScope(tx, input.companyId, input.productId, [
+      input.warehouseId,
+    ]);
+    const stock = await getOrCreateStock(tx, input.productId, input.warehouseId);
+    const qty = D(input.quantity);
+
+    if (!input.allowNegative && stock.quantity.lt(qty)) {
+      throw unprocessable(
+        `Saldo insuficiente de "${product.name}": disponível ${stock.quantity.toFixed(3)}, solicitado ${qty.toFixed(3)}.`,
+      );
+    }
+
+    const newQty = stock.quantity.minus(qty);
+    const updated = await tx.stockItem.update({
+      where: { id: stock.id },
+      data: { quantity: newQty },
+    });
+
+    const number = await nextNumber(tx, input.companyId, 'movement');
+    const mov = await tx.movement.create({
+      data: {
+        companyId: input.companyId,
+        number,
+        type: 'SAIDA',
+        productId: input.productId,
+        quantity: qty,
+        unitCost: stock.avgCost,
+        fromWarehouseId: input.warehouseId,
+        balanceFrom: newQty,
+        reason: input.reason ?? 'Saída de mercadoria',
+        document: input.document,
+        notes: input.notes,
+        userId: input.userId,
+      },
+      include: { product: true, fromWarehouse: true, user: true },
+    });
+
+    await enqueueStock(tx, input.companyId, updated.id);
+    await enqueueMovement(tx, input.companyId, mov.id);
+    return mov;
+  });
+}
+
+/**
+ * TRANSFERÊNCIA — move saldo entre os depósitos, atômico.
+ * Leva junto o custo médio da origem para não distorcer o CMV do destino.
+ */
+export async function transferencia(
+  input: MoveInput & { fromWarehouseId: string; toWarehouseId: string },
+) {
+  if (input.quantity <= 0) throw badRequest('A quantidade da transferência deve ser maior que zero.');
+  if (input.fromWarehouseId === input.toWarehouseId) {
+    throw badRequest('Depósito de origem e destino não podem ser o mesmo.');
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const { product } = await assertScope(tx, input.companyId, input.productId, [
+      input.fromWarehouseId,
+      input.toWarehouseId,
+    ]);
+
+    const from = await getOrCreateStock(tx, input.productId, input.fromWarehouseId);
+    const to = await getOrCreateStock(tx, input.productId, input.toWarehouseId);
+    const qty = D(input.quantity);
+
+    if (from.quantity.lt(qty)) {
+      throw unprocessable(
+        `Saldo insuficiente na origem para "${product.name}": disponível ${from.quantity.toFixed(3)}.`,
+      );
+    }
+
+    const newFrom = from.quantity.minus(qty);
+    const newTo = to.quantity.plus(qty);
+    const newToAvg = newTo.gt(0)
+      ? to.quantity.mul(to.avgCost).plus(qty.mul(from.avgCost)).div(newTo)
+      : from.avgCost;
+
+    const uFrom = await tx.stockItem.update({
+      where: { id: from.id },
+      data: { quantity: newFrom },
+    });
+    const uTo = await tx.stockItem.update({
+      where: { id: to.id },
+      data: { quantity: newTo, avgCost: newToAvg },
+    });
+
+    const number = await nextNumber(tx, input.companyId, 'movement');
+    const mov = await tx.movement.create({
+      data: {
+        companyId: input.companyId,
+        number,
+        type: 'TRANSFERENCIA',
+        productId: input.productId,
+        quantity: qty,
+        unitCost: from.avgCost,
+        fromWarehouseId: input.fromWarehouseId,
+        toWarehouseId: input.toWarehouseId,
+        balanceFrom: newFrom,
+        balanceTo: newTo,
+        reason: input.reason ?? 'Transferência entre depósitos',
+        document: input.document,
+        notes: input.notes,
+        userId: input.userId,
+      },
+      include: { product: true, fromWarehouse: true, toWarehouse: true, user: true },
+    });
+
+    await enqueueStock(tx, input.companyId, uFrom.id);
+    await enqueueStock(tx, input.companyId, uTo.id);
+    await enqueueMovement(tx, input.companyId, mov.id);
+    return mov;
+  });
+}
+
+/**
+ * AJUSTE — define o saldo real de um produto no depósito (contagem/acerto).
+ */
+export async function ajuste(
+  input: Omit<MoveInput, 'quantity'> & { warehouseId: string; newQuantity: number; countId?: string },
+) {
+  if (input.newQuantity < 0) throw badRequest('O saldo ajustado não pode ser negativo.');
+
+  return prisma.$transaction(async (tx) => {
+    await assertScope(tx, input.companyId, input.productId, [input.warehouseId]);
+    const stock = await getOrCreateStock(tx, input.productId, input.warehouseId);
+
+    const target = D(input.newQuantity);
+    const diff = target.minus(stock.quantity);
+    if (diff.isZero()) return null;
+
+    const updated = await tx.stockItem.update({
+      where: { id: stock.id },
+      data: { quantity: target },
+    });
+
+    const number = await nextNumber(tx, input.companyId, 'movement');
+    const mov = await tx.movement.create({
+      data: {
+        companyId: input.companyId,
+        number,
+        type: 'AJUSTE',
+        productId: input.productId,
+        quantity: diff.abs(),
+        unitCost: stock.avgCost,
+        fromWarehouseId: diff.isNegative() ? input.warehouseId : null,
+        toWarehouseId: diff.isNegative() ? null : input.warehouseId,
+        balanceFrom: diff.isNegative() ? target : null,
+        balanceTo: diff.isNegative() ? null : target,
+        reason: input.reason ?? 'Ajuste de inventário',
+        document: input.document,
+        notes: input.notes,
+        countId: input.countId,
+        userId: input.userId,
+      },
+      include: { product: true, user: true },
+    });
+
+    await enqueueStock(tx, input.companyId, updated.id);
+    await enqueueMovement(tx, input.companyId, mov.id);
+    return mov;
+  });
+}
+
+/**
+ * ESTORNO — desfaz um movimento confirmado, gerando o lançamento inverso.
+ */
+export async function estornar(companyId: string, movementId: string, userId: string, motivo?: string) {
+  return prisma.$transaction(async (tx) => {
+    const mov = await tx.movement.findFirst({ where: { id: movementId, companyId } });
+    if (!mov) throw notFound('Movimento não encontrado.');
+    if (mov.status === 'ESTORNADO') throw unprocessable('Este movimento já foi estornado.');
+    if (mov.type === 'VENDA') {
+      throw unprocessable('Baixas de venda são estornadas pelo cancelamento da venda no PDV.');
+    }
+
+    // desfaz saldos
+    if (mov.toWarehouseId) {
+      const s = await getOrCreateStock(tx, mov.productId, mov.toWarehouseId);
+      const u = await tx.stockItem.update({
+        where: { id: s.id },
+        data: { quantity: s.quantity.minus(mov.quantity) },
+      });
+      await enqueueStock(tx, companyId, u.id);
+    }
+    if (mov.fromWarehouseId) {
+      const s = await getOrCreateStock(tx, mov.productId, mov.fromWarehouseId);
+      const u = await tx.stockItem.update({
+        where: { id: s.id },
+        data: { quantity: s.quantity.plus(mov.quantity) },
+      });
+      await enqueueStock(tx, companyId, u.id);
+    }
+
+    await tx.movement.update({ where: { id: mov.id }, data: { status: 'ESTORNADO' } });
+
+    const number = await nextNumber(tx, companyId, 'movement');
+    const rev = await tx.movement.create({
+      data: {
+        companyId,
+        number,
+        type: 'ESTORNO',
+        productId: mov.productId,
+        quantity: mov.quantity,
+        unitCost: mov.unitCost,
+        fromWarehouseId: mov.toWarehouseId,
+        toWarehouseId: mov.fromWarehouseId,
+        reason: motivo ?? `Estorno do movimento #${mov.number}`,
+        reversalOf: mov.id,
+        userId,
+      },
+      include: { product: true, user: true },
+    });
+    await enqueueMovement(tx, companyId, rev.id);
+    return rev;
+  });
+}
+
+/** Posição consolidada de estoque com filtros. */
+export async function posicao(params: {
+  companyId: string;
+  warehouseId?: string;
+  search?: string;
+  onlyBelowMin?: boolean;
+  categoryId?: string;
+  take?: number;
+  skip?: number;
+}) {
+  const where: Prisma.StockItemWhereInput = {
+    product: {
+      companyId: params.companyId,
+      active: true,
+      ...(params.categoryId ? { categoryId: params.categoryId } : {}),
+      ...(params.search
+        ? {
+            OR: [
+              { name: { contains: params.search, mode: 'insensitive' } },
+              { sku: { contains: params.search, mode: 'insensitive' } },
+              { barcode: { contains: params.search, mode: 'insensitive' } },
+            ],
+          }
+        : {}),
+    },
+    ...(params.warehouseId ? { warehouseId: params.warehouseId } : {}),
+  };
+
+  const rows = await prisma.stockItem.findMany({
+    where,
+    include: { product: { include: { category: true } }, warehouse: true },
+    orderBy: [{ product: { name: 'asc' } }],
+    take: params.take ?? 500,
+    skip: params.skip ?? 0,
+  });
+
+  const mapped = rows.map((r) => ({
+    productId: r.productId,
+    sku: r.product.sku,
+    barcode: r.product.barcode,
+    name: r.product.name,
+    unit: r.product.unit,
+    category: r.product.category?.name ?? null,
+    warehouseId: r.warehouseId,
+    warehouse: r.warehouse.name,
+    warehouseCode: r.warehouse.code,
+    quantity: Number(r.quantity),
+    reserved: Number(r.reserved),
+    available: Number(r.quantity) - Number(r.reserved),
+    minStock: Number(r.product.minStock),
+    avgCost: Number(r.avgCost),
+    salePrice: Number(r.product.salePrice),
+    stockValue: Number(r.quantity) * Number(r.avgCost),
+    belowMin: Number(r.quantity) < Number(r.product.minStock),
+  }));
+
+  return params.onlyBelowMin ? mapped.filter((m) => m.belowMin) : mapped;
+}

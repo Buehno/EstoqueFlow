@@ -1,5 +1,13 @@
 node_modules/
 dist/
-build/
 .env
+.env.local
 *.log
+.DS_Store
+prisma/*.db
+apps/*/dist/
+
+# lixo temporário da migração de 18/09 (não pode ser apagado por restrição
+# de permissão da sessão remota — ignorado, sem efeito no app)
+/_novo/
+/_incoming.tar.gz.old

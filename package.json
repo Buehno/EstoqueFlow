@@ -1,0 +1,44 @@
+{
+  "name": "estoqueflow",
+  "version": "1.0.0",
+  "private": true,
+  "description": "EstoqueFlow — SaaS de controle de estoque multi-depósito com PDV, inventário cíclico e redundância em Google Sheets",
+  "license": "UNLICENSED",
+  "workspaces": [
+    "apps/api",
+    "apps/web"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "postinstall": "prisma generate",
+    "build": "npm run build:web && npm run build:api",
+    "build:web": "npm run build --workspace=apps/web",
+    "build:api": "npm run build --workspace=apps/api",
+    "start": "node apps/api/dist/server.js",
+    "dev": "concurrently -n api,web -c cyan,magenta \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "npm run dev --workspace=apps/api",
+    "dev:web": "npm run dev --workspace=apps/web",
+    "db:push": "prisma db push",
+    "db:migrate": "prisma migrate deploy",
+    "db:migrate:dev": "prisma migrate dev",
+    "db:studio": "prisma studio",
+    "db:seed": "node --experimental-strip-types prisma/seed.ts",
+    "release": "prisma migrate deploy && node prisma/seed.mjs",
+    "typecheck": "tsc -p apps/api --noEmit && tsc -p apps/web --noEmit",
+    "test": "node --test apps/api/test/*.test.mjs"
+  },
+  "prisma": {
+    "seed": "node prisma/seed.mjs"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.22.0"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "prisma": "^5.22.0",
+    "typescript": "^5.6.3",
+    "xlsx": "^0.18.5"
+  }
+}
