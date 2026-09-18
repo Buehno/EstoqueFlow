@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import { prisma, D, nextNumber } from '../lib/prisma.js';
 import { badRequest, notFound, unprocessable } from '../lib/errors.js';
@@ -19,13 +20,44 @@ export interface MoveInput {
   allowNegative?: boolean;
 }
 
-/** Busca (ou cria zerado) o saldo de um produto num depósito, com lock. */
+/**
+ * Busca (ou cria zerado) o saldo de um produto num depósito, TRAVANDO a
+ * linha (SELECT ... FOR UPDATE) dentro da transação.
+ *
+ * Achado no teste de força de 18/09: com um simples `findUnique` seguido de
+ * `update`, duas movimentações concorrentes no mesmo produto/depósito liam
+ * o mesmo saldo antes de qualquer uma escrever — a segunda a confirmar
+ * sobrescrevia o resultado da primeira em silêncio (100 saídas de 1 unidade
+ * em paralelo tiraram só 20 do saldo, não 100). O `FOR UPDATE` faz a segunda
+ * transação esperar a primeira terminar antes de ler, em vez de correr em
+ * paralelo sobre o mesmo número — sem isso, contagem de estoque diverge
+ * silenciosamente sempre que duas pessoas mexem no mesmo item ao mesmo
+ * tempo (bem comum: PDV + estoquista, ou duas movimentações seguidas).
+ */
 async function getOrCreateStock(tx: Tx, productId: string, warehouseId: string) {
-  const existing = await tx.stockItem.findUnique({
-    where: { productId_warehouseId: { productId, warehouseId } },
-  });
-  if (existing) return existing;
-  return tx.stockItem.create({ data: { productId, warehouseId, quantity: ZERO, avgCost: ZERO } });
+  // Cria a linha primeiro (fora do lock — não dá pra travar o que não
+  // existe). `ON CONFLICT DO NOTHING` deixa concorrência na criação segura.
+  await tx.$executeRaw`
+    INSERT INTO stock_items (id, product_id, warehouse_id, quantity, reserved, avg_cost, updated_at)
+    VALUES (${randomUUID()}::uuid, ${productId}::uuid, ${warehouseId}::uuid, 0, 0, 0, now())
+    ON CONFLICT (product_id, warehouse_id) DO NOTHING
+  `;
+  const rows = await tx.$queryRaw<
+    { id: string; quantity: Prisma.Decimal; reserved: Prisma.Decimal; avg_cost: Prisma.Decimal }[]
+  >`
+    SELECT id, quantity, reserved, avg_cost FROM stock_items
+    WHERE product_id = ${productId}::uuid AND warehouse_id = ${warehouseId}::uuid
+    FOR UPDATE
+  `;
+  const r = rows[0];
+  return {
+    id: r.id,
+    productId,
+    warehouseId,
+    quantity: new Prisma.Decimal(r.quantity),
+    reserved: new Prisma.Decimal(r.reserved),
+    avgCost: new Prisma.Decimal(r.avg_cost),
+  };
 }
 
 /** Garante que produto e depósito pertencem à empresa do usuário. */
@@ -162,8 +194,19 @@ export async function transferencia(
       input.toWarehouseId,
     ]);
 
-    const from = await getOrCreateStock(tx, input.productId, input.fromWarehouseId);
-    const to = await getOrCreateStock(tx, input.productId, input.toWarehouseId);
+    // Trava os dois depósitos numa ORDEM FIXA (pelo id, não por origem/
+    // destino) — senão uma transferência A->B e outra B->A do mesmo produto,
+    // acontecendo ao mesmo tempo, travariam em ordem invertida uma da outra
+    // e o Postgres teria que abortar uma delas por deadlock.
+    const primeiroId =
+      input.fromWarehouseId < input.toWarehouseId ? input.fromWarehouseId : input.toWarehouseId;
+    const segundoId =
+      input.fromWarehouseId < input.toWarehouseId ? input.toWarehouseId : input.fromWarehouseId;
+    const travados = new Map<string, Awaited<ReturnType<typeof getOrCreateStock>>>();
+    travados.set(primeiroId, await getOrCreateStock(tx, input.productId, primeiroId));
+    travados.set(segundoId, await getOrCreateStock(tx, input.productId, segundoId));
+    const from = travados.get(input.fromWarehouseId)!;
+    const to = travados.get(input.toWarehouseId)!;
     const qty = D(input.quantity);
 
     if (from.quantity.lt(qty)) {
@@ -276,7 +319,16 @@ export async function estornar(companyId: string, movementId: string, userId: st
       throw unprocessable('Baixas de venda são estornadas pelo cancelamento da venda no PDV.');
     }
 
-    // desfaz saldos
+    // desfaz saldos — trava na mesma ordem fixa (por id) que `transferencia`
+    // usa, pra nunca deadlockar contra uma transferência/estorno concorrente
+    // do mesmo produto entre os mesmos dois depósitos.
+    const idsParaTravar = [mov.toWarehouseId, mov.fromWarehouseId]
+      .filter((id): id is string => !!id)
+      .sort();
+    for (const id of idsParaTravar) {
+      await getOrCreateStock(tx, mov.productId, id);
+    }
+
     if (mov.toWarehouseId) {
       const s = await getOrCreateStock(tx, mov.productId, mov.toWarehouseId);
       const u = await tx.stockItem.update({

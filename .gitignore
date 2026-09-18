@@ -7,7 +7,9 @@ dist/
 prisma/*.db
 apps/*/dist/
 
-# lixo temporário da migração de 18/09 (não pode ser apagado por restrição
-# de permissão da sessão remota — ignorado, sem efeito no app)
-/_novo/
+# lixo temporário da correção de concorrência de 18/09 (sessão remota não
+# pode apagar arquivos — ignorado, sem efeito no app)
+/_novo2/
 /_incoming.tar.gz.old
+/_incoming2.tar.gz
+**/*.bagunca.*

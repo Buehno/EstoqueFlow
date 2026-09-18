@@ -1,7 +1,39 @@
+import { randomUUID } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import { prisma, D, nextNumber } from '../lib/prisma.js';
 import { badRequest, notFound, unprocessable } from '../lib/errors.js';
 import { enqueueMovement, enqueueSale, enqueueStock } from './sync.service.js';
+
+type Tx = Prisma.TransactionClient;
+
+/**
+ * Mesmo motivo do `getOrCreateStock` de `stock.service.ts` (achado no teste
+ * de força de 18/09): sem travar a linha, duas vendas/cancelamentos
+ * concorrentes no mesmo produto+depósito liam o mesmo saldo e uma
+ * sobrescrevia a outra em silêncio. `FOR UPDATE` serializa as transações
+ * concorrentes nessa linha em vez de deixar as duas lerem o mesmo número.
+ */
+async function lockStock(tx: Tx, productId: string, warehouseId: string) {
+  await tx.$executeRaw`
+    INSERT INTO stock_items (id, product_id, warehouse_id, quantity, reserved, avg_cost, updated_at)
+    VALUES (${randomUUID()}::uuid, ${productId}::uuid, ${warehouseId}::uuid, 0, 0, 0, now())
+    ON CONFLICT (product_id, warehouse_id) DO NOTHING
+  `;
+  const rows = await tx.$queryRaw<
+    { id: string; quantity: Prisma.Decimal; reserved: Prisma.Decimal; avg_cost: Prisma.Decimal }[]
+  >`
+    SELECT id, quantity, reserved, avg_cost FROM stock_items
+    WHERE product_id = ${productId}::uuid AND warehouse_id = ${warehouseId}::uuid
+    FOR UPDATE
+  `;
+  const r = rows[0];
+  return {
+    id: r.id,
+    quantity: new Prisma.Decimal(r.quantity),
+    reserved: new Prisma.Decimal(r.reserved),
+    avgCost: new Prisma.Decimal(r.avg_cost),
+  };
+}
 
 export interface SaleItemInput {
   productId: string;
@@ -55,20 +87,21 @@ export async function criarVenda(input: CreateSaleInput) {
       newQty: Prisma.Decimal;
     }[] = [];
 
+    // Trava os saldos em ordem fixa por productId (não pela ordem dos itens
+    // na venda) — duas vendas concorrentes com os mesmos produtos em ordem
+    // diferente na sacola não podem deadlockar uma na outra.
+    const itensEmOrdem = [...input.items].sort((a, b) => a.productId.localeCompare(b.productId));
+    const saldosTravados = new Map<string, Awaited<ReturnType<typeof lockStock>>>();
+    for (const item of itensEmOrdem) {
+      saldosTravados.set(item.productId, await lockStock(tx, item.productId, input.warehouseId));
+    }
+
     for (const item of input.items) {
       const product = byId.get(item.productId);
       if (!product) throw notFound(`Produto ${item.productId} não encontrado.`);
       if (item.quantity <= 0) throw badRequest(`Quantidade inválida para "${product.name}".`);
 
-      let stock = await tx.stockItem.findUnique({
-        where: { productId_warehouseId: { productId: product.id, warehouseId: input.warehouseId } },
-      });
-      if (!stock) {
-        stock = await tx.stockItem.create({
-          data: { productId: product.id, warehouseId: input.warehouseId },
-        });
-      }
-
+      const stock = saldosTravados.get(item.productId)!;
       const qty = D(item.quantity);
       if (stock.quantity.lt(qty)) {
         throw unprocessable(
@@ -179,17 +212,9 @@ export async function cancelarVenda(companyId: string, saleId: string, userId: s
     if (!sale) throw notFound('Venda não encontrada.');
     if (sale.status === 'CANCELADA') throw unprocessable('Esta venda já foi cancelada.');
 
-    for (const item of sale.items) {
-      let stock = await tx.stockItem.findUnique({
-        where: {
-          productId_warehouseId: { productId: item.productId, warehouseId: sale.warehouseId },
-        },
-      });
-      if (!stock) {
-        stock = await tx.stockItem.create({
-          data: { productId: item.productId, warehouseId: sale.warehouseId },
-        });
-      }
+    const itensEmOrdem = [...sale.items].sort((a, b) => a.productId.localeCompare(b.productId));
+    for (const item of itensEmOrdem) {
+      const stock = await lockStock(tx, item.productId, sale.warehouseId);
       const updated = await tx.stockItem.update({
         where: { id: stock.id },
         data: { quantity: stock.quantity.plus(item.quantity) },
