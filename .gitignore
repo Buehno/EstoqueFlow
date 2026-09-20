@@ -13,3 +13,6 @@ apps/*/dist/
 /_incoming.tar.gz.old
 /_incoming2.tar.gz
 **/*.bagunca.*
+/_novo3/
+/_incoming_v3.tar.gz
+/_to_delete/
