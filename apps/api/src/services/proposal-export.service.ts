@@ -5,8 +5,19 @@
  * PDF (pdfmake), Word (docx) e Excel (exceljs) — reproduzindo o
  * documento comercial que a empresa já utiliza.
  *
- * Nenhum dos geradores depende de rede, de Chromium ou de arquivos de
- * imagem: o cabeçalho da empresa é resolvido só com tipografia.
+ * Nenhum dos geradores depende de rede nem de Chromium — imagens só entram
+ * como data URI já resolvida (logotipo da empresa e foto por item), nunca
+ * buscada de disco ou de URL externa.
+ *
+ * Pedido de 20/09: as propostas reais da empresa trazem o logotipo no
+ * cabeçalho e uma foto do produto ao lado da descrição de cada item — o PDF
+ * gerado até aqui era só tipografia. `logoBase64` e `itens[].imagemBase64`
+ * cobrem PDF e Word (os dois formatos que de fato vão para o cliente). O
+ * Excel — mais uma planilha de trabalho/precificação do que um documento de
+ * apresentação — ganha só o logotipo no cabeçalho; embutir uma miniatura por
+ * linha ali exigiria reposicionar imagens flutuantes por cima de células
+ * mescladas de altura variável, o que é fonte de bug estrutural com pouco
+ * ganho real. Se um dia for preciso, dá para revisitar.
  */
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -18,6 +29,7 @@ import {
   BorderStyle,
   Document,
   Footer,
+  ImageRun,
   Packer,
   Paragraph,
   ShadingType,
@@ -49,7 +61,7 @@ export interface PropostaExport {
   cliente: { nome: string; telefone?: string | null; local?: string | null; email?: string | null };
   escopo: string;
   intro?: string | null;
-  itens: { quantidadeTexto: string; descricao: string; total: number }[];
+  itens: { quantidadeTexto: string; descricao: string; total: number; imagemBase64?: string | null }[];
   total: number;
   totalPorExtenso: string;
   totalAVista?: number | null;
@@ -61,6 +73,55 @@ export interface PropostaExport {
   notaImportante?: string | null;
   vendedor?: string | null;
   empresa: { nome: string; endereco: string; email: string; site: string; telefone: string };
+  /** Data URI (`data:image/...;base64,...`) do logotipo. Ausente = cabeçalho só em tipografia, como antes. */
+  logoBase64?: string | null;
+}
+
+/** Extrai `{mime, base64}` de uma data URI, ou `null` se o formato não bater. */
+function decodificarDataUri(uri: string | null | undefined): { mime: string; buffer: Buffer } | null {
+  if (!uri) return null;
+  const m = /^data:(image\/(?:png|jpeg|jpg|webp));base64,([A-Za-z0-9+/=]+)$/.exec(uri.trim());
+  if (!m) return null;
+  try {
+    return { mime: m[1]!, buffer: Buffer.from(m[2]!, 'base64') };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Largura/altura em pixels lidas direto do cabeçalho do arquivo (PNG/JPEG),
+ * sem depender de nenhuma lib de imagem — o `docx` (ImageRun) exige as
+ * dimensões originais para não distorcer a proporção ao redimensionar.
+ */
+function dimensoesImagem(buffer: Buffer): { width: number; height: number } | null {
+  // PNG: assinatura de 8 bytes, depois o chunk IHDR (4 bytes de tamanho + "IHDR")
+  // traz largura e altura como uint32 big-endian nos bytes 16..23.
+  if (buffer.length > 24 && buffer[0] === 0x89 && buffer.toString('ascii', 1, 4) === 'PNG') {
+    return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
+  }
+  // JPEG: percorre os marcadores até achar um SOFn (0xC0-0xCF, exceto DHT/JPG/DAC).
+  if (buffer.length > 4 && buffer[0] === 0xff && buffer[1] === 0xd8) {
+    let offset = 2;
+    while (offset + 9 < buffer.length) {
+      if (buffer[offset] !== 0xff) { offset++; continue; }
+      const marker = buffer[offset + 1]!;
+      if (marker === 0xd8 || marker === 0xd9) { offset += 2; continue; }
+      const tamanhoSegmento = buffer.readUInt16BE(offset + 2);
+      const ehSOF = marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
+      if (ehSOF) {
+        return { height: buffer.readUInt16BE(offset + 5), width: buffer.readUInt16BE(offset + 7) };
+      }
+      offset += 2 + tamanhoSegmento;
+    }
+  }
+  return null;
+}
+
+/** Redimensiona (mantendo proporção) para caber num retângulo máximo, em pixels. */
+function encaixar(dim: { width: number; height: number }, maxW: number, maxH: number) {
+  const escala = Math.min(maxW / dim.width, maxH / dim.height, 1);
+  return { width: Math.max(1, Math.round(dim.width * escala)), height: Math.max(1, Math.round(dim.height * escala)) };
 }
 
 /* ------------------------------------------------------------------ */
@@ -256,11 +317,33 @@ function regua(margem: [number, number, number, number]): Content {
   };
 }
 
-function conteudoPdf(p: PropostaExport): Content[] {
+/** Nomes únicos ("img0", "img1"...) para o dicionário `images` do pdfmake. */
+function chavesImagensPdf(p: PropostaExport): { logo?: string; itens: (string | undefined)[] } {
+  let n = 0;
+  const logo = p.logoBase64 ? `img${n++}` : undefined;
+  const itens = p.itens.map((i) => (i.imagemBase64 ? `img${n++}` : undefined));
+  return { logo, itens };
+}
+
+function dicionarioImagensPdf(p: PropostaExport, chaves: ReturnType<typeof chavesImagensPdf>): Record<string, string> {
+  const dict: Record<string, string> = {};
+  if (chaves.logo && p.logoBase64) dict[chaves.logo] = p.logoBase64;
+  p.itens.forEach((item, i) => {
+    const chave = chaves.itens[i];
+    if (chave && item.imagemBase64) dict[chave] = item.imagemBase64;
+  });
+  return dict;
+}
+
+function conteudoPdf(p: PropostaExport, chaves: ReturnType<typeof chavesImagensPdf>): Content[] {
   const c: Content[] = [];
 
-  // 1. Cabeçalho da empresa (só tipografia — não há arquivo de logotipo).
-  c.push({ text: p.empresa.nome, style: 'marca' });
+  // 1. Cabeçalho da empresa — logotipo real quando cadastrado, tipografia como fallback.
+  if (chaves.logo) {
+    c.push({ image: chaves.logo, width: 130, alignment: 'center', margin: [0, 0, 0, 4] });
+  } else {
+    c.push({ text: p.empresa.nome, style: 'marca' });
+  }
   c.push({ text: RAZAO_SOCIAL, style: 'marcaSub' });
   c.push({ text: ESPECIALIDADES, style: 'marcaEspec' });
   c.push(regua([0, 8, 0, 12]));
@@ -294,14 +377,24 @@ function conteudoPdf(p: PropostaExport): Content[] {
       { text: 'TOTAL', style: 'th', alignment: 'right', fillColor: `#${CINZA_CABECALHO}` },
     ],
   ];
-  for (const item of p.itens) {
+  p.itens.forEach((item, i) => {
+    const chaveImagem = chaves.itens[i];
+    // O `\n` é preservado pelo pdfmake — a descrição costuma ter várias linhas.
+    const descricao: Content = { text: item.descricao, alignment: 'left', fontSize: 9, lineHeight: 1.2 };
+    const celulaDescricao: PdfTableCell = chaveImagem
+      ? {
+          columns: [
+            { image: chaveImagem, width: 70, margin: [0, 0, 8, 0] },
+            { ...descricao, width: '*' },
+          ],
+        }
+      : descricao;
     body.push([
       { text: item.quantidadeTexto, alignment: 'center', fontSize: 9.5 },
-      // O `\n` é preservado pelo pdfmake — a descrição costuma ter várias linhas.
-      { text: item.descricao, alignment: 'left', fontSize: 9, lineHeight: 1.2 },
+      celulaDescricao,
       { text: moeda(item.total), alignment: 'right', fontSize: 9.5 },
     ]);
-  }
+  });
   c.push({
     table: { headerRows: 1, widths: [34, '*', 82], body, dontBreakRows: true },
     layout: LAYOUT_TABELA,
@@ -406,17 +499,19 @@ function rodapePdf(p: PropostaExport) {
 export async function gerarPdf(p: PropostaExport): Promise<Buffer> {
   registrarFontes();
 
+  const chaves = chavesImagensPdf(p);
   const doc: TDocumentDefinitions = {
     pageSize: 'A4',
     pageMargins: [40, 40, 40, 78],
     defaultStyle: { font: 'Roboto', fontSize: 9.5, lineHeight: 1.15, color: '#1A1A1A' },
     styles: ESTILOS_PDF,
+    images: dicionarioImagensPdf(p, chaves),
     info: {
       title: `Proposta ${numeroFormatado(p)} — ${p.cliente.nome}`,
       author: p.empresa.nome,
       subject: p.escopo,
     },
-    content: conteudoPdf(p),
+    content: conteudoPdf(p, chaves),
     footer: rodapePdf(p),
   };
 
@@ -482,6 +577,17 @@ function parRico(partes: { texto: string; bold?: boolean; size?: number; color?:
   });
 }
 
+/** Monta um `ImageRun` a partir de uma data URI, já encaixado no tamanho máximo. */
+function imagemDocx(uri: string | null | undefined, maxW: number, maxH: number): ImageRun | null {
+  const decodificada = decodificarDataUri(uri);
+  if (!decodificada) return null;
+  const dim = dimensoesImagem(decodificada.buffer);
+  if (!dim) return null;
+  const tamanho = encaixar(dim, maxW, maxH);
+  const tipo = decodificada.mime === 'image/png' ? 'png' : 'jpg';
+  return new ImageRun({ type: tipo, data: decodificada.buffer, transformation: tamanho });
+}
+
 const BORDA_CELULA = {
   top: { style: BorderStyle.SINGLE, size: 4, color: CINZA_BORDA },
   bottom: { style: BorderStyle.SINGLE, size: 4, color: CINZA_BORDA },
@@ -519,20 +625,23 @@ function tabelaDocx(p: PropostaExport): Table {
     ],
   });
 
-  const corpo = p.itens.map(
-    (item) =>
-      new TableRow({
-        children: [
-          celula([par(item.quantidadeTexto, { size: 10, align: AlignmentType.CENTER })], LARGURAS_DOCX[0]!),
-          // Uma linha da descrição por parágrafo — preserva as quebras de `\n`.
-          celula(
-            linhas(item.descricao).map((linha) => par(linha, { size: 9.5, depois: 1 })),
-            LARGURAS_DOCX[1]!,
-          ),
-          celula([par(moeda(item.total), { size: 10, align: AlignmentType.RIGHT })], LARGURAS_DOCX[2]!),
-        ],
-      }),
-  );
+  const corpo = p.itens.map((item) => {
+    const imagem = imagemDocx(item.imagemBase64, 110, 110);
+    const paragrafosDescricao = linhas(item.descricao).map((linha) => par(linha, { size: 9.5, depois: 1 }));
+    return new TableRow({
+      children: [
+        celula([par(item.quantidadeTexto, { size: 10, align: AlignmentType.CENTER })], LARGURAS_DOCX[0]!),
+        // Foto (quando houver) acima da descrição — uma linha por parágrafo, preservando os `\n`.
+        celula(
+          imagem
+            ? [new Paragraph({ alignment: AlignmentType.LEFT, spacing: { after: 60 }, children: [imagem] }), ...paragrafosDescricao]
+            : paragrafosDescricao,
+          LARGURAS_DOCX[1]!,
+        ),
+        celula([par(moeda(item.total), { size: 10, align: AlignmentType.RIGHT })], LARGURAS_DOCX[2]!),
+      ],
+    });
+  });
 
   return new Table({
     width: { size: 100, type: WidthType.PERCENTAGE },
@@ -544,8 +653,13 @@ function tabelaDocx(p: PropostaExport): Table {
 export async function gerarDocx(p: PropostaExport): Promise<Buffer> {
   const filhos: (Paragraph | Table)[] = [];
 
-  // 1. Cabeçalho da empresa.
-  filhos.push(par(p.empresa.nome, { bold: true, size: 26, align: AlignmentType.CENTER, color: '1F3864', caracteres: 40, depois: 2 }));
+  // 1. Cabeçalho da empresa — logotipo real quando cadastrado, tipografia como fallback.
+  const logo = imagemDocx(p.logoBase64, 220, 90);
+  if (logo) {
+    filhos.push(new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 40 }, children: [logo] }));
+  } else {
+    filhos.push(par(p.empresa.nome, { bold: true, size: 26, align: AlignmentType.CENTER, color: '1F3864', caracteres: 40, depois: 2 }));
+  }
   filhos.push(par(RAZAO_SOCIAL, { size: 10, align: AlignmentType.CENTER, color: '333333', depois: 1 }));
   filhos.push(par(ESPECIALIDADES, { size: 7.5, align: AlignmentType.CENTER, color: CINZA_TEXTO, depois: 10 }));
 
@@ -707,8 +821,28 @@ export async function gerarXlsx(p: PropostaExport): Promise<Buffer> {
     return atual;
   };
 
-  // 1. Cabeçalho da empresa.
-  escreverFaixa(p.empresa.nome, { bold: true, size: 20, align: 'center', color: '1F3864', altura: 28 });
+  // 1. Cabeçalho da empresa — logotipo real quando cadastrado, tipografia como fallback.
+  // (Só o cabeçalho: uma foto por item exigiria posicionar imagens flutuantes por
+  // cima de células mescladas de altura variável — ver comentário no topo do arquivo.)
+  const logoDecodificado = decodificarDataUri(p.logoBase64);
+  const dimLogo = logoDecodificado ? dimensoesImagem(logoDecodificado.buffer) : null;
+  if (logoDecodificado && dimLogo) {
+    const tamanho = encaixar(dimLogo, 160, 60);
+    const idImagem = wb.addImage({
+      buffer: logoDecodificado.buffer as any,
+      extension: logoDecodificado.mime === 'image/png' ? 'png' : 'jpeg',
+    });
+    const linhaLogo = linha;
+    ws.getRow(linhaLogo).height = Math.max(30, tamanho.height * 0.75);
+    ws.addImage(idImagem, {
+      tl: { col: 1, row: linhaLogo - 1 },
+      ext: { width: tamanho.width, height: tamanho.height },
+      editAs: 'oneCell',
+    } as any);
+    linha++;
+  } else {
+    escreverFaixa(p.empresa.nome, { bold: true, size: 20, align: 'center', color: '1F3864', altura: 28 });
+  }
   escreverFaixa(RAZAO_SOCIAL, { size: 10, align: 'center' });
   escreverFaixa(ESPECIALIDADES, { size: 8, align: 'center', color: CINZA_TEXTO, altura: 16 });
   linha++;

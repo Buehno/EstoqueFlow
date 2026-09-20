@@ -599,6 +599,8 @@ model ProposalTemplateItem {
 
   /// Item ligado ao estoque. Nulo = item livre (mão de obra, estimativa).
   productId String? @map("product_id") @db.Uuid
+  /// Foto do item (data URI já comprimida no navegador) — herdada por toda proposta criada a partir do modelo.
+  imageUrl  String? @map("image_url") @db.Text
 
   template ProposalTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
   product  Product?         @relation(fields: [productId], references: [id], onDelete: SetNull)
@@ -689,6 +691,8 @@ model ProposalItem {
   productId String? @map("product_id") @db.Uuid
   /// Saldo disponível no instante em que o item entrou — para conferência.
   stockAtInsert Decimal? @map("stock_at_insert") @db.Decimal(14, 3)
+  /// Foto do item (data URI já comprimida no navegador) — sai ao lado da descrição no PDF/Word.
+  imageUrl  String? @map("image_url") @db.Text
 
   proposal Proposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
   product  Product? @relation(fields: [productId], references: [id], onDelete: SetNull)

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Download, RotateCcw, ScrollText } from 'lucide-react';
+import { Download, Pencil, RotateCcw, ScrollText } from 'lucide-react';
 import { api, ApiError, type MovementRow, type Warehouse } from '../lib/api';
-import { Badge, brl, Card, dt, Empty, Field, Input, qty, Select, Spinner, Table, useToast } from '../lib/ui';
+import { Badge, brl, Card, dt, Empty, Field, Input, Modal, qty, Select, Spinner, Table, useToast } from '../lib/ui';
 import { useAuth } from '../App';
 
 const TONE: Record<string, 'ok' | 'danger' | 'info' | 'warn' | 'brand' | 'neutral'> = {
@@ -14,9 +14,11 @@ export default function Movimentacoes() {
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [loading, setLoading] = useState(true);
   const [f, setF] = useState({ type: '', warehouseId: '', from: '', to: '', search: '' });
+  const [editando, setEditando] = useState<MovementRow | null>(null);
   const toast = useToast();
   const { me } = useAuth();
   const podeEstornar = me?.user.role === 'OWNER' || me?.user.role === 'ADMIN';
+  const podeEditar = podeEstornar;
 
   const load = async () => {
     setLoading(true);
@@ -38,6 +40,24 @@ export default function Movimentacoes() {
       void load();
     } catch (e) {
       toast({ kind: 'err', title: 'Não foi possível estornar', body: e instanceof ApiError ? e.message : undefined });
+    }
+  };
+
+  const salvarEdicao = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!editando) return;
+    const f2 = Object.fromEntries(new FormData(e.currentTarget)) as Record<string, string>;
+    try {
+      await api.patch(`/movements/${editando.id}`, {
+        reason: f2.reason || null,
+        document: f2.document || null,
+        notes: f2.notes || null,
+      });
+      toast({ kind: 'ok', title: `Movimento #${editando.number} corrigido` });
+      setEditando(null);
+      void load();
+    } catch (e) {
+      toast({ kind: 'err', title: 'Não foi possível corrigir', body: e instanceof ApiError ? e.message : undefined });
     }
   };
 
@@ -98,6 +118,14 @@ export default function Movimentacoes() {
               { key: 'm', header: 'Motivo', render: (r) => <span className="text-[13px] text-muted">{r.reason ?? '—'}</span> },
               { key: 'u', header: 'Usuário', render: (r) => <span className="text-[13px]">{r.user}</span> },
               { key: 'd', header: 'Data', align: 'right', render: (r) => <span className="text-[12.5px] text-faint">{dt(r.createdAt)}</span> },
+              ...(podeEditar ? [{
+                key: 'ed', header: '', align: 'right' as const,
+                render: (r: MovementRow) => (
+                  <button onClick={() => setEditando(r)} className="btn-ghost btn-sm gap-1.5" aria-label={`Corrigir motivo/documento do movimento ${r.number}`}>
+                    <Pencil size={13} /> Corrigir
+                  </button>
+                ),
+              }] : []),
               ...(podeEstornar ? [{
                 key: 'a', header: '', align: 'right' as const,
                 render: (r: MovementRow) =>
@@ -111,6 +139,27 @@ export default function Movimentacoes() {
           />
         )}
       </Card>
+
+      <Modal open={!!editando} onClose={() => setEditando(null)} title={editando ? `Corrigir movimento #${editando.number}` : ''}>
+        {editando && (
+          <form onSubmit={salvarEdicao} className="space-y-4">
+            <p className="rounded-xl bg-raised p-3.5 text-[13px] leading-relaxed text-muted">
+              Só motivo, documento e observações podem ser corrigidos aqui. Quantidade, produto e depósito
+              não são editáveis — se o número lançado estiver errado, <b>estorne este movimento</b> e
+              lance um novo, para o histórico continuar contando o que realmente aconteceu.
+            </p>
+            <Field label="Motivo"><Input name="reason" defaultValue={editando.reason ?? ''} placeholder="Motivo / natureza do lançamento" /></Field>
+            <Field label="Documento" hint="NF, pedido, OS"><Input name="document" defaultValue={editando.document ?? ''} /></Field>
+            <Field label="Observações">
+              <textarea name="notes" defaultValue={editando.notes ?? ''} rows={3} className="field h-auto w-full resize-none py-2.5 text-[14px]" />
+            </Field>
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setEditando(null)} className="btn-ghost">Cancelar</button>
+              <button type="submit" className="btn-primary">Salvar correção</button>
+            </div>
+          </form>
+        )}
+      </Modal>
     </div>
   );
 }

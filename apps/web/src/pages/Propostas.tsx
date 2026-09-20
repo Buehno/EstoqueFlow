@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
-  AlarmClock, ChevronRight, FileText, FolderOpen, LayoutTemplate, Plus, Search, TrendingUp,
+  AlarmClock, ChevronRight, FileText, FolderOpen, LayoutTemplate, Plus, Search, Sparkles, TrendingUp,
 } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { Badge, brl, Card, cx, dOnly, Empty, Field, Input, int, Modal, Select, Spinner, Stat, Table, useToast } from '../lib/ui';
+import { useAuth } from '../App';
 
 export const STATUS_ROTULO: Record<string, string> = {
   RASCUNHO: 'Rascunho',
@@ -47,6 +48,9 @@ export default function Propostas() {
   const [nova, setNova] = useState(false);
   const toast = useToast();
   const nav = useNavigate();
+  const { me } = useAuth();
+  const podeGerenciarModelos = me?.user.role === 'OWNER' || me?.user.role === 'ADMIN';
+  const [carregandoPadroes, setCarregandoPadroes] = useState(false);
 
   const carregar = async () => {
     const qs = new URLSearchParams(Object.entries(filtro).filter(([, v]) => v) as [string, string][]);
@@ -74,6 +78,21 @@ export default function Propostas() {
     } catch (err) {
       toast({ kind: 'err', title: 'Não foi possível criar', body: err instanceof ApiError ? err.message : undefined });
     }
+  };
+
+  const carregarModelosPadrao = async () => {
+    setCarregandoPadroes(true);
+    try {
+      const r = await api.post<{ criados: string[]; pulados: string[] }>('/proposal-templates/seed-jundiaquece');
+      if (r.criados.length) {
+        toast({ kind: 'ok', title: `${r.criados.length} modelo(s) carregado(s)`, body: r.criados.join(', ') });
+      } else {
+        toast({ kind: 'ok', title: 'Nenhum modelo novo', body: 'Os 5 modelos já estavam cadastrados.' });
+      }
+      void carregar();
+    } catch (err) {
+      toast({ kind: 'err', title: 'Não foi possível carregar os modelos', body: err instanceof ApiError ? err.message : undefined });
+    } finally { setCarregandoPadroes(false); }
   };
 
   if (carregando) return <Spinner label="Carregando propostas…" />;
@@ -243,7 +262,15 @@ export default function Propostas() {
         <Card
           title="Modelos salvos"
           subtitle="Cada modelo já vem com escopo, itens, condições e validade"
-          action={<span className="text-[12.5px] text-faint">Salve qualquer proposta como modelo pela tela dela</span>}
+          action={
+            podeGerenciarModelos ? (
+              <button onClick={carregarModelosPadrao} disabled={carregandoPadroes} className="btn-ghost btn-sm gap-1.5">
+                <Sparkles size={14} /> {carregandoPadroes ? 'Carregando…' : 'Carregar os 5 modelos reais (SORIA, RINNAI, SOLIS, Piscina, Trocador)'}
+              </button>
+            ) : (
+              <span className="text-[12.5px] text-faint">Salve qualquer proposta como modelo pela tela dela</span>
+            )
+          }
         >
           <Table
             rows={modelos}

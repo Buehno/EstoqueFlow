@@ -6,6 +6,11 @@ import { authenticate, requireRole, CAN_SELL, CAN_MANAGE } from '../lib/auth.js'
 import { badRequest, conflict, notFound, unprocessable } from '../lib/errors.js';
 import { porExtensoEntreParenteses } from '../lib/extenso.js';
 import { gerarDocx, gerarPdf, gerarXlsx, nomeArquivo, type PropostaExport } from '../services/proposal-export.service.js';
+import { LOGO_PADRAO_BASE64 } from '../assets/logo-padrao.js';
+import { MODELOS_REAIS } from '../assets/modelos-reais.js';
+
+/** Data URI — cabe uma foto de produto já comprimida no navegador (~500KB decodificados). */
+const imageUrlSchema = z.string().max(700_000).regex(/^data:image\/(png|jpe?g|webp);base64,/).optional().nullable();
 
 const STATUS = [
   'RASCUNHO', 'ENVIADA', 'AGUARDANDO_RETORNO', 'EM_NEGOCIACAO',
@@ -23,6 +28,7 @@ const itemSchema = z.object({
   unitPrice: z.coerce.number().min(0).default(0),
   total: z.coerce.number().min(0).optional(),
   productId: z.string().uuid().optional().nullable(),
+  imageUrl: imageUrlSchema,
 });
 
 const corpoSchema = {
@@ -181,6 +187,7 @@ export default async function proposalRoutes(app: FastifyInstance) {
             unitPrice: i.unitPrice,
             total: i.total ?? i.unitPrice * i.quantity,
             productId: i.productId ?? null,
+            imageUrl: i.imageUrl ?? null,
           })),
         },
       },
@@ -224,6 +231,7 @@ export default async function proposalRoutes(app: FastifyInstance) {
           unitPrice: new Prisma.Decimal(i.unitPrice),
           total: new Prisma.Decimal(i.total ?? i.unitPrice * i.quantity),
           productId: i.productId ?? null,
+          imageUrl: i.imageUrl ?? null,
         })),
       });
     }
@@ -232,6 +240,52 @@ export default async function proposalRoutes(app: FastifyInstance) {
       data: cabecalho as Prisma.ProposalTemplateUpdateInput,
       include: { items: { orderBy: { position: 'asc' } } },
     });
+  });
+
+  /**
+   * Carrega as 5 propostas reais recebidas em 20/09 (SORIA 600BP, RINNAI
+   * 21L, SOLAR CASA SOLIS 400AP, SOLAR PISCINA, TROCADOR DE CALOR) como
+   * modelos reutilizáveis — texto, preços, condições e foto de cada produto
+   * exatamente como no documento original. Idempotente: um modelo cujo nome
+   * já existe é pulado (não duplica nem sobrescreve o que já foi editado).
+   */
+  app.post('/proposal-templates/seed-jundiaquece', { preHandler: requireRole(...CAN_MANAGE) }, async (req) => {
+    const companyId = req.user!.companyId;
+    const existentes = new Set(
+      (await prisma.proposalTemplate.findMany({ where: { companyId }, select: { name: true } })).map((t) => t.name),
+    );
+
+    const criados: string[] = [];
+    const pulados: string[] = [];
+    for (const modelo of MODELOS_REAIS) {
+      if (existentes.has(modelo.name)) { pulados.push(modelo.name); continue; }
+      await prisma.proposalTemplate.create({
+        data: {
+          companyId,
+          name: modelo.name,
+          scopeTitle: modelo.scopeTitle,
+          paymentTerms: modelo.paymentTerms,
+          paymentCash: modelo.paymentCash,
+          deliveryTerms: modelo.deliveryTerms,
+          closingNote: modelo.closingNote,
+          footerNote: modelo.footerNote,
+          city: 'Jundiaí',
+          items: {
+            create: modelo.items.map((i, idx) => ({
+              position: idx,
+              quantity: i.quantity,
+              quantityText: i.quantityText,
+              description: i.description,
+              unitPrice: i.unitPrice,
+              total: i.total,
+              imageUrl: i.imageUrl,
+            })),
+          },
+        },
+      });
+      criados.push(modelo.name);
+    }
+    return { criados, pulados };
   });
 
   app.delete('/proposal-templates/:id', { preHandler: requireRole(...CAN_MANAGE) }, async (req) => {
@@ -468,6 +522,7 @@ export default async function proposalRoutes(app: FastifyInstance) {
                   unitPrice: i.unitPrice,
                   total: i.total,
                   productId: i.productId,
+                  imageUrl: i.imageUrl,
                 })),
               }
             : undefined,
@@ -563,6 +618,7 @@ export default async function proposalRoutes(app: FastifyInstance) {
             total: new Prisma.Decimal(i.total ?? i.unitPrice * i.quantity),
             productId: i.productId ?? null,
             stockAtInsert: i.productId ? new Prisma.Decimal(saldos.get(i.productId) ?? 0) : null,
+            imageUrl: i.imageUrl ?? null,
           })),
         });
       }
@@ -735,6 +791,7 @@ export default async function proposalRoutes(app: FastifyInstance) {
           create: p.items.map((i) => ({
             position: i.position, quantity: i.quantity, quantityText: i.quantityText,
             description: i.description, unitPrice: i.unitPrice, total: i.total, productId: i.productId,
+            imageUrl: i.imageUrl,
           })),
         },
       },
@@ -772,6 +829,7 @@ export default async function proposalRoutes(app: FastifyInstance) {
         quantidadeTexto: i.quantityText ?? String(Math.round(Number(i.quantity))).padStart(2, '0'),
         descricao: i.description,
         total: n(i.total),
+        imagemBase64: i.imageUrl,
       })),
       total: n(p.total),
       totalPorExtenso: p.totalInWords ?? porExtensoEntreParenteses(n(p.total)),
@@ -790,6 +848,7 @@ export default async function proposalRoutes(app: FastifyInstance) {
         site: 'www.jundaquece.com.br',
         telefone: empresa?.phone ?? '(11) 4522-6487',
       },
+      logoBase64: empresa?.logoUrl ?? LOGO_PADRAO_BASE64,
     };
 
     const gerar = { pdf: gerarPdf, docx: gerarDocx, xlsx: gerarXlsx }[formato];

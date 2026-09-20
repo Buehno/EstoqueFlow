@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { authenticate, requireRole, CAN_WRITE_STOCK, CAN_MANAGE } from '../lib/auth.js';
-import { ajuste, entrada, estornar, posicao, saida, transferencia } from '../services/stock.service.js';
+import { ajuste, editarMovimento, entrada, estornar, posicao, saida, transferencia } from '../services/stock.service.js';
 
 const baseMove = {
   productId: z.string().uuid(),
@@ -80,6 +80,24 @@ export default async function stockRoutes(app: FastifyInstance) {
     return mov ?? { message: 'Saldo já estava correto, nenhum ajuste necessário.' };
   });
 
+  /**
+   * CORREÇÃO — edita motivo/documento/observações de um lançamento já
+   * confirmado. Quantidade, tipo e depósito são imutáveis de propósito: para
+   * corrigir um número errado, estorne (abaixo) e lance de novo — assim o
+   * histórico real fica registrado em vez de reescrito.
+   */
+  app.patch('/movements/:id', { preHandler: requireRole(...CAN_MANAGE) }, async (req) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const body = z
+      .object({
+        reason: z.string().max(500).nullable().optional(),
+        document: z.string().max(120).nullable().optional(),
+        notes: z.string().max(2000).nullable().optional(),
+      })
+      .parse(req.body);
+    return editarMovimento(req.user!.companyId, id, req.user!.id, body);
+  });
+
   /** ESTORNO */
   app.post('/movements/:id/estorno', { preHandler: requireRole(...CAN_MANAGE) }, async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
@@ -154,6 +172,7 @@ export default async function stockRoutes(app: FastifyInstance) {
         to: m.toWarehouse ? { id: m.toWarehouse.id, name: m.toWarehouse.name } : null,
         reason: m.reason,
         document: m.document,
+        notes: m.notes,
         user: m.user.name,
         createdAt: m.createdAt,
       })),

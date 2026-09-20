@@ -89,7 +89,7 @@ export interface MovementRow {
   quantity: number; unitCost: number;
   from: { id: string; name: string } | null;
   to: { id: string; name: string } | null;
-  reason: string | null; document: string | null; user: string; createdAt: string;
+  reason: string | null; document: string | null; notes: string | null; user: string; createdAt: string;
 }
 export interface Dashboard {
   valorTotalEstoque: number; unidadesTotais: number; produtosAtivos: number;

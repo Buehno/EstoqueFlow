@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { GripVertical, Link2, PackageSearch, Search, Trash2, TriangleAlert } from 'lucide-react';
+import { GripVertical, ImagePlus, Link2, PackageSearch, Search, Trash2, TriangleAlert, X } from 'lucide-react';
 import { api } from '../lib/api';
-import { brl, cx, qty } from '../lib/ui';
+import { comprimirImagem } from '../lib/imagem';
+import { brl, cx, qty, useToast } from '../lib/ui';
 import type { ProdutoBusca } from './ProductSearch';
 
 export interface ItemProposta {
@@ -14,6 +15,7 @@ export interface ItemProposta {
   productId?: string | null;
   produtoNome?: string | null;
   saldo?: number | null;
+  imageUrl?: string | null;
 }
 
 /** Reconhece "/peça ", "/peca ", "/item " ou "/produto " sendo digitado. */
@@ -46,7 +48,24 @@ export default function ItemEditor({
   // do comando. O botão de lupa abre a mesma busca/lista de sugestões sem
   // exigir nenhuma sintaxe especial.
   const [buscaManualAberta, setBuscaManualAberta] = useState(false);
+  const [enviandoFoto, setEnviandoFoto] = useState(false);
   const areaRef = useRef<HTMLTextAreaElement>(null);
+  const fotoInputRef = useRef<HTMLInputElement>(null);
+  const toast = useToast();
+
+  async function escolherFoto(arquivo: File | undefined) {
+    if (!arquivo) return;
+    setEnviandoFoto(true);
+    try {
+      const dataUri = await comprimirImagem(arquivo, { maxLargura: 640, qualidade: 0.75 });
+      onChange({ ...item, imageUrl: dataUri });
+    } catch {
+      toast({ kind: 'err', title: 'Não foi possível processar a imagem' });
+    } finally {
+      setEnviandoFoto(false);
+      if (fotoInputRef.current) fotoInputRef.current.value = '';
+    }
+  }
 
   // altura acompanha o conteúdo — a descrição costuma ter vários parágrafos
   useEffect(() => {
@@ -127,6 +146,46 @@ export default function ItemEditor({
               <button type="button" onClick={onSubir} disabled={!onSubir} className="rounded p-0.5 hover:text-ink disabled:opacity-25" aria-label="Mover para cima">▲</button>
               <button type="button" onClick={onDescer} disabled={!onDescer} className="rounded p-0.5 hover:text-ink disabled:opacity-25" aria-label="Mover para baixo">▼</button>
             </div>
+          )}
+        </div>
+
+        <div className="w-[74px] shrink-0">
+          <span className="mb-1 block text-[11px] font-medium text-faint">FOTO</span>
+          <input
+            ref={fotoInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            disabled={somenteLeitura}
+            onChange={(e) => void escolherFoto(e.target.files?.[0])}
+            aria-label={`Foto do item ${indice + 1}`}
+          />
+          {item.imageUrl ? (
+            <div className="group relative h-[52px] w-[52px] overflow-hidden rounded-lg border border-line">
+              <img src={item.imageUrl} alt="" className="h-full w-full object-cover" />
+              {!somenteLeitura && (
+                <button
+                  type="button"
+                  onClick={() => onChange({ ...item, imageUrl: null })}
+                  className="absolute inset-0 hidden place-items-center bg-black/50 text-white group-hover:grid"
+                  aria-label={`Remover foto do item ${indice + 1}`}
+                >
+                  <X size={16} />
+                </button>
+              )}
+            </div>
+          ) : (
+            !somenteLeitura && (
+              <button
+                type="button"
+                onClick={() => fotoInputRef.current?.click()}
+                disabled={enviandoFoto}
+                className="grid h-[52px] w-[52px] place-items-center rounded-lg border border-dashed border-line text-faint transition-colors hover:border-brand hover:text-brand"
+                aria-label={`Adicionar foto ao item ${indice + 1}`}
+              >
+                <ImagePlus size={17} />
+              </button>
+            )
           )}
         </div>
 

@@ -1,7 +1,14 @@
-import { useEffect, useState } from 'react';
-import { AlertTriangle, CheckCircle2, ExternalLink, Lock, RefreshCw, ShieldCheck } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { AlertTriangle, CheckCircle2, ExternalLink, Lock, RefreshCw, ShieldCheck, Upload } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
-import { Badge, Card, dt, Empty, Spinner, Table, useToast } from '../lib/ui';
+import { comprimirImagem } from '../lib/imagem';
+import { Badge, Card, dt, Empty, Field, Input, Spinner, Table, useToast } from '../lib/ui';
+import { useAuth } from '../App';
+
+interface DadosEmpresa {
+  id: string; name: string; legalName: string | null; cnpj: string | null; slug: string;
+  phone: string | null; email: string | null; logoUrl: string | null;
+}
 
 interface SyncStatus {
   habilitado: boolean;
@@ -17,10 +24,49 @@ interface SyncStatus {
 export default function Integracoes() {
   const [s, setS] = useState<SyncStatus | null>(null);
   const [busy, setBusy] = useState(false);
+  const [empresa, setEmpresa] = useState<DadosEmpresa | null>(null);
+  const [salvandoEmpresa, setSalvandoEmpresa] = useState(false);
+  const [enviandoLogo, setEnviandoLogo] = useState(false);
+  const logoInputRef = useRef<HTMLInputElement>(null);
   const toast = useToast();
+  const { me } = useAuth();
+  const podeEditarEmpresa = me?.user.role === 'OWNER' || me?.user.role === 'ADMIN';
 
   const load = () => api.get<SyncStatus>('/sync/status').then(setS);
-  useEffect(() => { void load(); }, []);
+  const carregarEmpresa = () => api.get<DadosEmpresa>('/auth/company').then(setEmpresa);
+  useEffect(() => { void load(); void carregarEmpresa(); }, []);
+
+  const salvarEmpresa = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const f = Object.fromEntries(new FormData(e.currentTarget)) as Record<string, string>;
+    setSalvandoEmpresa(true);
+    try {
+      const atualizada = await api.patch<DadosEmpresa>('/auth/company', {
+        name: f.name, legalName: f.legalName || undefined, cnpj: f.cnpj || undefined,
+        phone: f.phone || undefined, email: f.email || '',
+      });
+      setEmpresa(atualizada);
+      toast({ kind: 'ok', title: 'Dados da empresa atualizados' });
+    } catch (e) {
+      toast({ kind: 'err', title: 'Não foi possível salvar', body: e instanceof ApiError ? e.message : undefined });
+    } finally { setSalvandoEmpresa(false); }
+  };
+
+  const trocarLogo = async (arquivo: File | undefined) => {
+    if (!arquivo) return;
+    setEnviandoLogo(true);
+    try {
+      const dataUri = await comprimirImagem(arquivo, { maxLargura: 480, qualidade: 0.85 });
+      const atualizada = await api.patch<DadosEmpresa>('/auth/company', { logoUrl: dataUri });
+      setEmpresa(atualizada);
+      toast({ kind: 'ok', title: 'Logotipo atualizado', body: 'Já sai assim nos próximos PDFs e Word das propostas.' });
+    } catch (e) {
+      toast({ kind: 'err', title: 'Não foi possível enviar o logotipo', body: e instanceof ApiError ? e.message : undefined });
+    } finally {
+      setEnviandoLogo(false);
+      if (logoInputRef.current) logoInputRef.current.value = '';
+    }
+  };
 
   const run = async (path: string, label: string) => {
     setBusy(true);
@@ -41,6 +87,73 @@ export default function Integracoes() {
         <h1 className="text-[26px] font-bold tracking-tight">Integrações</h1>
         <p className="mt-1 text-[14px] text-muted">Redundância dos dados em planilha espelho do Google Sheets.</p>
       </header>
+
+      <Card title="Dados da empresa" subtitle="Nome, contato e logotipo — é o que sai no cabeçalho do PDF/Word das propostas">
+        {!empresa ? <Spinner /> : (
+          <div className="grid gap-5 sm:grid-cols-[120px_1fr]">
+            <div>
+              <span className="mb-1 block text-[11px] font-medium text-faint">LOGOTIPO</span>
+              <input
+                ref={logoInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => void trocarLogo(e.target.files?.[0])}
+                aria-label="Enviar logotipo da empresa"
+              />
+              {empresa.logoUrl ? (
+                <div className="group relative h-[100px] w-[100px] overflow-hidden rounded-xl border border-line bg-white">
+                  <img src={empresa.logoUrl} alt="" className="h-full w-full object-contain p-2" />
+                  {podeEditarEmpresa && (
+                    <button
+                      type="button"
+                      onClick={() => logoInputRef.current?.click()}
+                      className="absolute inset-0 hidden place-items-center bg-black/50 text-[11px] font-medium text-white group-hover:grid"
+                    >
+                      Trocar
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <div className="h-[100px] w-[100px] rounded-xl border border-line bg-white p-2">
+                  <p className="text-[10px] leading-tight text-faint">Usando o logotipo padrão da Jundiaquece nas exportações</p>
+                </div>
+              )}
+              {podeEditarEmpresa && (
+                <button
+                  type="button"
+                  onClick={() => logoInputRef.current?.click()}
+                  disabled={enviandoLogo}
+                  className="btn-ghost btn-sm mt-2 w-full gap-1.5"
+                >
+                  <Upload size={13} /> {empresa.logoUrl ? 'Trocar' : 'Enviar'}
+                </button>
+              )}
+            </div>
+
+            {podeEditarEmpresa ? (
+              <form onSubmit={salvarEmpresa} className="grid gap-3 sm:grid-cols-2">
+                <Field label="Nome"><Input name="name" required defaultValue={empresa.name} /></Field>
+                <Field label="Razão social"><Input name="legalName" defaultValue={empresa.legalName ?? ''} /></Field>
+                <Field label="CNPJ"><Input name="cnpj" defaultValue={empresa.cnpj ?? ''} /></Field>
+                <Field label="Telefone"><Input name="phone" defaultValue={empresa.phone ?? ''} placeholder="(11) 4522-6487" /></Field>
+                <Field label="E-mail"><Input name="email" type="email" defaultValue={empresa.email ?? ''} /></Field>
+                <div className="flex items-end sm:col-span-2">
+                  <button type="submit" disabled={salvandoEmpresa} className="btn-primary btn-sm">
+                    {salvandoEmpresa ? 'Salvando…' : 'Salvar dados da empresa'}
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <dl className="grid gap-2 text-[13.5px] sm:grid-cols-2">
+                <div><dt className="text-faint">Nome</dt><dd>{empresa.name}</dd></div>
+                <div><dt className="text-faint">Telefone</dt><dd>{empresa.phone ?? '—'}</dd></div>
+                <div><dt className="text-faint">E-mail</dt><dd>{empresa.email ?? '—'}</dd></div>
+              </dl>
+            )}
+          </div>
+        )}
+      </Card>
 
       <Card id="sync-status">
         <div className="flex flex-wrap items-start justify-between gap-4">

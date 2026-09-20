@@ -202,7 +202,7 @@ export default async function authRoutes(app: FastifyInstance) {
       where: { id: req.user!.companyId },
       select: {
         id: true, name: true, legalName: true, cnpj: true, slug: true,
-        phone: true, email: true, sheetId: true, sheetSyncOn: true,
+        phone: true, email: true, sheetId: true, sheetSyncOn: true, logoUrl: true,
       },
     }),
   );
@@ -217,6 +217,8 @@ export default async function authRoutes(app: FastifyInstance) {
         email: z.string().email().optional().or(z.literal('')),
         sheetId: z.string().optional(),
         sheetSyncOn: z.boolean().optional(),
+        // Data URI — logotipo comprimido no navegador antes de enviar.
+        logoUrl: z.string().max(700_000).regex(/^data:image\/(png|jpe?g|webp);base64,/).nullable().optional(),
       })
       .parse(req.body);
 
@@ -233,7 +235,7 @@ export default async function authRoutes(app: FastifyInstance) {
     return prisma.company.update({
       where: { id: req.user!.companyId },
       data: { ...body, email: body.email || undefined, ...(slug ? { slug } : {}) },
-      select: { id: true, name: true, slug: true, legalName: true, cnpj: true },
+      select: { id: true, name: true, slug: true, legalName: true, cnpj: true, logoUrl: true },
     });
   });
 

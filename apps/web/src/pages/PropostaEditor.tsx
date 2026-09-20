@@ -36,6 +36,7 @@ export default function PropostaEditor() {
         productId: i.productId,
         produtoNome: i.product?.name ?? null,
         saldo: i.stockAtInsert,
+        imageUrl: i.imageUrl ?? null,
       })),
     );
     setSujo(false);
@@ -56,6 +57,7 @@ export default function PropostaEditor() {
         items: itens.map((i) => ({
           quantity: i.quantity, quantityText: i.quantityText, description: i.description,
           unitPrice: i.unitPrice, total: i.total, productId: i.productId ?? null,
+          imageUrl: i.imageUrl ?? null,
         })),
       });
       await api.patch(`/proposals/${id}`, {

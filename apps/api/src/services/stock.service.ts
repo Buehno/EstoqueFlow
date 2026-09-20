@@ -370,6 +370,60 @@ export async function estornar(companyId: string, movementId: string, userId: st
   });
 }
 
+/**
+ * CORREÇÃO DE MOVIMENTO — edita só os campos "de anotação" (motivo, documento,
+ * observações) de um lançamento já confirmado.
+ *
+ * Pedido de 20/09: "mesmo gerando o registro, deve poder atualizar depois".
+ * A trava deliberada aqui é que quantidade, tipo e depósito NUNCA são
+ * editáveis retroativamente — o próprio schema chama `balanceFrom`/
+ * `balanceTo` de "trilha de auditoria imutável" (ver `schema.prisma`), e
+ * mudar a quantidade de um lançamento antigo deixaria o saldo congelado nos
+ * lançamentos seguintes do mesmo produto/depósito mentindo silenciosamente
+ * sobre o que realmente aconteceu naquele momento — exatamente o tipo de
+ * inconsistência que o teste de força de 18/09 caçou. Para corrigir uma
+ * quantidade errada, o caminho correto continua sendo estornar o lançamento
+ * (endpoint /movements/:id/estorno, que já existe) e lançar um novo — isso
+ * preserva o histórico real (o que foi digitado, quando, por quem) em vez de
+ * reescrevê-lo.
+ */
+export async function editarMovimento(
+  companyId: string,
+  movementId: string,
+  userId: string,
+  patch: { reason?: string | null; document?: string | null; notes?: string | null },
+) {
+  return prisma.$transaction(async (tx) => {
+    const mov = await tx.movement.findFirst({ where: { id: movementId, companyId } });
+    if (!mov) throw notFound('Movimento não encontrado.');
+
+    const before = { reason: mov.reason, document: mov.document, notes: mov.notes };
+    const atualizado = await tx.movement.update({
+      where: { id: mov.id },
+      data: {
+        reason: patch.reason !== undefined ? patch.reason : undefined,
+        document: patch.document !== undefined ? patch.document : undefined,
+        notes: patch.notes !== undefined ? patch.notes : undefined,
+      },
+      include: { product: true, fromWarehouse: true, toWarehouse: true, user: true },
+    });
+
+    await tx.auditLog.create({
+      data: {
+        companyId,
+        userId,
+        entity: 'Movement',
+        entityId: mov.id,
+        action: 'UPDATE',
+        before,
+        after: { reason: atualizado.reason, document: atualizado.document, notes: atualizado.notes },
+      },
+    });
+
+    return atualizado;
+  });
+}
+
 /** Posição consolidada de estoque com filtros. */
 export async function posicao(params: {
   companyId: string;
