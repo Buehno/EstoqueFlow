@@ -91,10 +91,53 @@ export interface MovementRow {
   to: { id: string; name: string } | null;
   reason: string | null; document: string | null; notes: string | null; user: string; createdAt: string;
 }
+export type SituacaoCompra = 'ALERTA_COMPRA' | 'ATENCAO' | 'OK' | 'SEM_MINIMO';
+
+/** Linha do relatório de reposição — sempre pelo total somado dos depósitos. */
+export interface LinhaCompra {
+  productId: string; sku: string; name: string; unit: string; size: string | null;
+  categoria: string | null; fornecedor: string | null;
+  depositos: { id: string; code: string; name: string; quantity: number }[];
+  total: number; minStock: number; pontoCompra: number;
+  situacao: SituacaoCompra; comprarParaRepor: number;
+  custoMedio: number; valorEstoque: number; saidas90: number; coberturaDias: number | null;
+}
+export interface PosicaoCompra {
+  depositos: { id: string; code: string; name: string }[];
+  itens: LinhaCompra[];
+  resumo: {
+    produtos: number; alertaCompra: number; atencao: number; ok: number; semMinimo: number;
+    valorAComprar: number; valorEstoque: number;
+  };
+  alerta: LinhaCompra[]; atencao: LinhaCompra[]; semMinimo: LinhaCompra[];
+}
+export interface SaldoQuebrado {
+  productId: string; sku: string; name: string; unit: string;
+  warehouseId: string; warehouse: string; warehouseCode: string;
+  atual: number; arredondado: number; diferenca: number;
+}
+export interface GrupoDuplicado {
+  chave: string;
+  produtos: {
+    id: string; sku: string; name: string; unit: string; size: string | null; active: boolean;
+    criadoEm: string; total: number;
+    depositos: { code: string; name: string; quantity: number }[];
+    movimentos: number; vendas: number; propostas: number;
+  }[];
+}
+
 export interface Dashboard {
   valorTotalEstoque: number; unidadesTotais: number; produtosAtivos: number;
-  depositos: { id: string; code: string; name: string; skus: number; unidades: number; valor: number; abaixoMinimo: number }[];
-  alertas: { abaixoMinimo: number; lista: { productId: string; sku: string; name: string; warehouse: string; quantity: number; minStock: number; falta: number }[] };
+  depositos: { id: string; code: string; name: string; skus: number; unidades: number; valor: number; semSaldo: number }[];
+  alertas: {
+    alertaCompra: number; atencao: number; semMinimo: number; abaixoMinimo: number;
+    lista: {
+      productId: string; sku: string; name: string; unit: string;
+      total: number; minStock: number; pontoCompra: number;
+      situacao: 'ALERTA_COMPRA' | 'ATENCAO'; falta: number;
+      depositos: { code: string; name: string; quantity: number }[];
+    }[];
+  };
   vendas: { hoje: { qtd: number; total: number }; ultimos30: { qtd: number; receita: number; custo: number; margem: number } };
   movimentos7dias: { tipo: string; qtd: number }[];
   ultimasMovimentacoes: { id: string; number: number; tipo: string; produto: string; sku: string; quantidade: number; origem: string | null; destino: string | null; usuario: string; data: string }[];

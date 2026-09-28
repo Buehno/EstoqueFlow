@@ -47,23 +47,56 @@ export async function dashboard(companyId: string) {
       skus: rows.filter((r) => Number(r.quantity) > 0).length,
       unidades: rows.reduce((a, r) => a + Number(r.quantity), 0),
       valor: rows.reduce((a, r) => a + Number(r.quantity) * Number(r.avgCost), 0),
-      abaixoMinimo: rows.filter((r) => Number(r.quantity) < Number(r.product.minStock)).length,
+      // Antes aqui havia um "abaixo do mínimo" por depósito. Saiu de propósito
+      // em 24/09: o mínimo é da peça, não do depósito — comparar depósito a
+      // depósito acusava falta em item que, somando os dois, estava sobrando.
+      semSaldo: rows.filter((r) => Number(r.quantity) <= 0).length,
     };
   });
 
-  const abaixoMinimo = stockRows
-    .filter((r) => Number(r.quantity) < Number(r.product.minStock))
-    .map((r) => ({
-      productId: r.productId,
+  /**
+   * Alerta pela regra de 24/09: o que decide é o TOTAL somado dos depósitos,
+   * não o saldo de cada um. `minStock` é o teto de conforto (abaixo dele o
+   * item fica em ATENÇÃO) e metade do mínimo é o gatilho de compra.
+   * A lista detalhada, com todas as visões, está em `/reports/compras`.
+   */
+  const porProduto = new Map<string, { sku: string; name: string; unit: string; minStock: number; total: number; porDeposito: { code: string; name: string; quantity: number }[] }>();
+  for (const r of stockRows) {
+    const atual = porProduto.get(r.productId) ?? {
       sku: r.product.sku,
       name: r.product.name,
-      warehouse: r.warehouse.name,
-      quantity: Number(r.quantity),
+      unit: r.product.unit,
       minStock: Number(r.product.minStock),
-      falta: Number(r.product.minStock) - Number(r.quantity),
+      total: 0,
+      porDeposito: [],
+    };
+    atual.total += Number(r.quantity);
+    atual.porDeposito.push({ code: r.warehouse.code, name: r.warehouse.name, quantity: Number(r.quantity) });
+    porProduto.set(r.productId, atual);
+  }
+
+  const classificados = [...porProduto.entries()]
+    .filter(([, p]) => p.minStock > 0 && p.total <= p.minStock)
+    .map(([productId, p]) => ({
+      productId,
+      sku: p.sku,
+      name: p.name,
+      unit: p.unit,
+      total: p.total,
+      minStock: p.minStock,
+      pontoCompra: p.minStock * 0.5,
+      situacao: (p.total <= p.minStock * 0.5 ? 'ALERTA_COMPRA' : 'ATENCAO') as 'ALERTA_COMPRA' | 'ATENCAO',
+      falta: Number((p.minStock - p.total).toFixed(3)),
+      depositos: p.porDeposito.sort((a, b) => a.code.localeCompare(b.code)),
     }))
-    .sort((a, b) => b.falta - a.falta)
-    .slice(0, 25);
+    .sort((a, b) =>
+      (a.situacao === b.situacao ? 0 : a.situacao === 'ALERTA_COMPRA' ? -1 : 1) ||
+      b.falta - a.falta);
+
+  const alertaCompra = classificados.filter((c) => c.situacao === 'ALERTA_COMPRA');
+  const atencao = classificados.filter((c) => c.situacao === 'ATENCAO');
+  const semMinimo = [...porProduto.values()].filter((p) => p.minStock <= 0).length;
+  const abaixoMinimo = classificados.slice(0, 25);
 
   const receita30 = Number(vendas30._sum.total ?? 0);
   const custo30 = Number(vendas30._sum.costTotal ?? 0);
@@ -73,7 +106,17 @@ export async function dashboard(companyId: string) {
     unidadesTotais: stockRows.reduce((a, r) => a + Number(r.quantity), 0),
     produtosAtivos,
     depositos: porDeposito,
-    alertas: { abaixoMinimo: abaixoMinimo.length, lista: abaixoMinimo },
+    alertas: {
+      /** Quantos disparam compra agora (total <= 50% do mínimo). */
+      alertaCompra: alertaCompra.length,
+      /** Quantos estão em atenção (total <= mínimo, acima da metade). */
+      atencao: atencao.length,
+      /** Produtos ainda sem estoque mínimo definido — ficam fora do alerta. */
+      semMinimo,
+      /** Compatibilidade: total de itens que pedem olhada (alerta + atenção). */
+      abaixoMinimo: classificados.length,
+      lista: abaixoMinimo,
+    },
     vendas: {
       hoje: { qtd: vendasHoje._count, total: Number(vendasHoje._sum.total ?? 0) },
       ultimos30: {

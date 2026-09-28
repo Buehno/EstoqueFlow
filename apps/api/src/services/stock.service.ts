@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { prisma, D, nextNumber } from '../lib/prisma.js';
 import { badRequest, notFound, unprocessable } from '../lib/errors.js';
 import { enqueueStock, enqueueMovement } from './sync.service.js';
+import { permiteFracao, saldosQuebrados } from './compras.service.js';
 
 type Tx = Prisma.TransactionClient;
 
@@ -60,6 +61,22 @@ async function getOrCreateStock(tx: Tx, productId: string, warehouseId: string) 
   };
 }
 
+/**
+ * Item vendido por unidade não aceita quantidade quebrada — pedido de 24/09:
+ * "tudo que for unidade deve ser redondo, o que for em metros deve ser em
+ * metros". A trava vale para toda movimentação nova; os saldos quebrados que
+ * já existiam são corrigidos por `arredondarSaldosQuebrados`.
+ */
+function assertQuantidadeInteira(unit: string | null | undefined, nome: string, quantidade: number) {
+  if (permiteFracao(unit)) return;
+  if (quantidade % 1 !== 0) {
+    throw badRequest(
+      `"${nome}" é vendido por ${(unit ?? 'UN').toUpperCase()}: a quantidade precisa ser um número inteiro ` +
+        `(recebi ${quantidade}). Para lançar fração, cadastre o produto com unidade de medida (MT, KG, L…).`,
+    );
+  }
+}
+
 /** Garante que produto e depósito pertencem à empresa do usuário. */
 async function assertScope(tx: Tx, companyId: string, productId: string, warehouseIds: string[]) {
   const product = await tx.product.findFirst({ where: { id: productId, companyId } });
@@ -85,6 +102,7 @@ export async function entrada(input: MoveInput & { warehouseId: string }) {
     const { product } = await assertScope(tx, input.companyId, input.productId, [
       input.warehouseId,
     ]);
+    assertQuantidadeInteira(product.unit, product.name, input.quantity);
 
     const stock = await getOrCreateStock(tx, input.productId, input.warehouseId);
     const qty = D(input.quantity);
@@ -136,6 +154,7 @@ export async function saida(input: MoveInput & { warehouseId: string }) {
     const { product } = await assertScope(tx, input.companyId, input.productId, [
       input.warehouseId,
     ]);
+    assertQuantidadeInteira(product.unit, product.name, input.quantity);
     const stock = await getOrCreateStock(tx, input.productId, input.warehouseId);
     const qty = D(input.quantity);
 
@@ -193,6 +212,7 @@ export async function transferencia(
       input.fromWarehouseId,
       input.toWarehouseId,
     ]);
+    assertQuantidadeInteira(product.unit, product.name, input.quantity);
 
     // Trava os dois depósitos numa ORDEM FIXA (pelo id, não por origem/
     // destino) — senão uma transferência A->B e outra B->A do mesmo produto,
@@ -267,7 +287,8 @@ export async function ajuste(
   if (input.newQuantity < 0) throw badRequest('O saldo ajustado não pode ser negativo.');
 
   return prisma.$transaction(async (tx) => {
-    await assertScope(tx, input.companyId, input.productId, [input.warehouseId]);
+    const { product } = await assertScope(tx, input.companyId, input.productId, [input.warehouseId]);
+    assertQuantidadeInteira(product.unit, product.name, input.newQuantity);
     const stock = await getOrCreateStock(tx, input.productId, input.warehouseId);
 
     const target = D(input.newQuantity);
@@ -422,6 +443,103 @@ export async function editarMovimento(
 
     return atualizado;
   });
+}
+
+/**
+ * ARREDONDAMENTO DOS SALDOS QUEBRADOS — pedido de 24/09.
+ *
+ * A contagem trouxe saldos como "cotovelo de cobre 33,845" em item vendido
+ * por unidade. Em vez de um UPDATE mudo no banco, cada correção entra como
+ * AJUSTE: o movimento guarda o saldo anterior, o novo e quem mandou corrigir.
+ * Produto vendido por medida (MT, M, KG, L…) não é tocado — ali a fração é
+ * legítima.
+ *
+ * `dryRun` (padrão) só devolve a lista do que mudaria, para conferência.
+ */
+export async function arredondarSaldosQuebrados(
+  companyId: string,
+  userId: string,
+  opcoes: { dryRun?: boolean; motivo?: string } = {},
+) {
+  const dryRun = opcoes.dryRun !== false;
+  const pendentes = await saldosQuebrados(companyId);
+
+  if (dryRun) return { dryRun: true, total: pendentes.length, itens: pendentes, aplicados: 0 };
+
+  let aplicados = 0;
+  for (const item of pendentes) {
+    await ajuste({
+      companyId,
+      userId,
+      productId: item.productId,
+      warehouseId: item.warehouseId,
+      newQuantity: item.arredondado,
+      reason: opcoes.motivo ?? 'Arredondamento de saldo — item vendido por unidade',
+      notes: `Saldo anterior ${item.atual} → ${item.arredondado} (${item.diferenca > 0 ? '+' : ''}${item.diferenca})`,
+    });
+    aplicados += 1;
+  }
+  return { dryRun: false, total: pendentes.length, itens: pendentes, aplicados };
+}
+
+/**
+ * DESATIVAR CADASTRO DUPLICADO — pedido de 24/09 (PDF "peças para ser
+ * excluída - duplicidade").
+ *
+ * O produto nunca é apagado: o histórico dele (movimentos, vendas, propostas)
+ * precisa continuar existindo. Ele sai da busca e dos relatórios por
+ * `active = false`. Se ainda tiver saldo, o saldo é zerado por um AJUSTE
+ * explicando o motivo — assim o total do estoque não fica contando uma peça
+ * que já está contada no cadastro que ficou.
+ */
+export async function desativarProdutoDuplicado(
+  companyId: string,
+  productId: string,
+  userId: string,
+  motivo?: string,
+) {
+  const produto = await prisma.product.findFirst({
+    where: { id: productId, companyId },
+    include: { stockItems: true },
+  });
+  if (!produto) throw notFound('Produto não encontrado.');
+
+  const razao = motivo ?? 'Cadastro duplicado — saldo conferido no cadastro que permanece';
+  const zerados: { warehouseId: string; de: number }[] = [];
+
+  for (const saldo of produto.stockItems) {
+    const atual = Number(saldo.quantity);
+    if (atual === 0) continue;
+    await ajuste({
+      companyId,
+      userId,
+      productId,
+      warehouseId: saldo.warehouseId,
+      newQuantity: 0,
+      reason: razao,
+      notes: `Saldo ${atual} zerado ao desativar o cadastro duplicado "${produto.name}"`,
+    });
+    zerados.push({ warehouseId: saldo.warehouseId, de: atual });
+  }
+
+  const desativado = await prisma.product.update({
+    where: { id: productId },
+    data: { active: false },
+  });
+
+  await prisma.auditLog.create({
+    data: {
+      companyId,
+      userId,
+      entity: 'Product',
+      entityId: productId,
+      action: 'UPDATE',
+      before: { active: true, saldos: zerados },
+      after: { active: false, motivo: razao },
+    },
+  });
+
+  return { id: desativado.id, name: desativado.name, saldosZerados: zerados };
 }
 
 /** Posição consolidada de estoque com filtros. */

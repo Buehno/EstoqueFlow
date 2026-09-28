@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
-  AlarmClock, ChevronRight, FileText, FolderOpen, LayoutTemplate, Plus, Search, Sparkles, TrendingUp,
+  AlarmClock, ChevronRight, FileText, FolderOpen, KanbanSquare, LayoutTemplate, Plus, Search, Sparkles, TrendingUp,
 } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { Badge, brl, Card, cx, dOnly, Empty, Field, Input, int, Modal, Select, Spinner, Stat, Table, useToast } from '../lib/ui';
@@ -37,8 +37,23 @@ interface Pasta {
   propostas: Linha[]; total: number; emAberto: number; ganhas: number;
 }
 
+/** Colunas do kanban — a negociação anda da esquerda para a direita. */
+const COLUNAS: { status: string; label: string }[] = [
+  { status: 'RASCUNHO', label: 'Rascunho' },
+  { status: 'ENVIADA', label: 'Enviada' },
+  { status: 'AGUARDANDO_RETORNO', label: 'Aguardando retorno' },
+  { status: 'EM_NEGOCIACAO', label: 'Em negociação' },
+  { status: 'ACEITA', label: 'Aceita' },
+  { status: 'RECUSADA', label: 'Recusada' },
+];
+
+const MESES = [
+  'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
+  'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro',
+];
+
 export default function Propostas() {
-  const [aba, setAba] = useState<'propostas' | 'pastas' | 'modelos'>('propostas');
+  const [aba, setAba] = useState<'kanban' | 'propostas' | 'ano' | 'modelos'>('kanban');
   const [resumo, setResumo] = useState<any>(null);
   const [linhas, setLinhas] = useState<Linha[]>([]);
   const [pastas, setPastas] = useState<Pasta[]>([]);
@@ -54,6 +69,7 @@ export default function Propostas() {
 
   const carregar = async () => {
     const qs = new URLSearchParams(Object.entries(filtro).filter(([, v]) => v) as [string, string][]);
+    qs.set('take', '200'); // teto da API — o quadro e as pastas por ano usam esta mesma lista
     const [r, l, p, m] = await Promise.all([
       api.get<any>('/proposals/resumo'),
       api.get<{ items: Linha[] }>(`/proposals?${qs}`),
@@ -61,6 +77,20 @@ export default function Propostas() {
       api.get<Modelo[]>('/proposal-templates'),
     ]);
     setResumo(r); setLinhas(l.items); setPastas(p); setModelos(m); setCarregando(false);
+  };
+
+  /** Arrastar o card para outra coluna muda o estágio da negociação. */
+  const moverStatus = async (id: string, status: string, numero: number) => {
+    const antes = linhas;
+    setLinhas((l) => l.map((x) => (x.id === id ? { ...x, status } : x))); // resposta imediata
+    try {
+      await api.post(`/proposals/${id}/status`, { status, message: 'Movida no quadro' });
+      toast({ kind: 'ok', title: `#${String(numero).padStart(4, '0')} → ${STATUS_ROTULO[status]}` });
+      void carregar();
+    } catch (err) {
+      setLinhas(antes);
+      toast({ kind: 'err', title: 'Não foi possível mover', body: err instanceof ApiError ? err.message : undefined });
+    }
   };
 
   useEffect(() => { const t = setTimeout(() => void carregar(), 250); return () => clearTimeout(t); }, [filtro]);
@@ -97,9 +127,39 @@ export default function Propostas() {
 
   if (carregando) return <Spinner label="Carregando propostas…" />;
 
+  /** Propostas agrupadas por ano e, dentro dele, por mês de criação. */
+  const porAno = (() => {
+    const anos = new Map<number, Map<number, Linha[]>>();
+    for (const l of linhas) {
+      const d = new Date(l.createdAt);
+      const ano = d.getFullYear();
+      const mes = d.getMonth();
+      const meses = anos.get(ano) ?? new Map<number, Linha[]>();
+      meses.set(mes, [...(meses.get(mes) ?? []), l]);
+      anos.set(ano, meses);
+    }
+    return [...anos.entries()]
+      .sort((a, b) => b[0] - a[0])
+      .map(([ano, meses]) => ({
+        ano,
+        total: [...meses.values()].flat().reduce((a, p) => a + p.totalValue, 0),
+        quantidade: [...meses.values()].flat().length,
+        meses: [...meses.entries()]
+          .sort((a, b) => b[0] - a[0])
+          .map(([mes, props]) => ({
+            mes,
+            nome: MESES[mes],
+            propostas: props.sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt)),
+            total: props.reduce((a, p) => a + p.totalValue, 0),
+            ganhas: props.filter((p) => p.status === 'ACEITA').length,
+          })),
+      }));
+  })();
+
   const abas = [
-    { k: 'propostas' as const, label: 'Propostas', icon: FileText, contagem: linhas.length },
-    { k: 'pastas' as const, label: 'Pastas por cliente', icon: FolderOpen, contagem: pastas.length },
+    { k: 'kanban' as const, label: 'Quadro', icon: KanbanSquare, contagem: linhas.length },
+    { k: 'propostas' as const, label: 'Lista', icon: FileText, contagem: linhas.length },
+    { k: 'ano' as const, label: 'Por ano', icon: FolderOpen, contagem: porAno.length },
     { k: 'modelos' as const, label: 'Modelos', icon: LayoutTemplate, contagem: modelos.length },
   ];
 
@@ -219,40 +279,111 @@ export default function Propostas() {
         </>
       )}
 
-      {aba === 'pastas' && (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {pastas.length === 0 && <Empty icon={<FolderOpen size={24} />} title="Nenhum cliente ainda" body="A pasta nasce junto com a primeira proposta do cliente." />}
-          {pastas.map((p) => (
-            <Card key={p.chave} className="!p-0">
-              <div className="p-5">
-                <div className="flex items-start gap-2.5">
-                  <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-brand/12 text-brand">
-                    <FolderOpen size={19} />
-                  </span>
-                  <div className="min-w-0">
-                    <p className="truncate text-[15px] font-semibold">{p.cliente}</p>
-                    <p className="truncate text-[11.5px] text-faint">{[p.telefone, p.local].filter(Boolean).join(' · ') || 'sem contato'}</p>
+      {aba === 'kanban' && (
+        <div className="-mx-4 overflow-x-auto px-4 pb-2 lg:mx-0 lg:px-0">
+          <div className="flex min-w-max gap-3">
+            {COLUNAS.map((col) => {
+              const doStatus = linhas.filter((l) => l.status === col.status);
+              const valor = doStatus.reduce((a, p) => a + p.totalValue, 0);
+              return (
+                <div
+                  key={col.status}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    const id = e.dataTransfer.getData('text/proposta');
+                    const alvo = linhas.find((l) => l.id === id);
+                    if (alvo && alvo.status !== col.status) void moverStatus(id, col.status, alvo.number);
+                  }}
+                  className="flex w-[280px] shrink-0 flex-col rounded-2xl border border-line bg-surface"
+                >
+                  <div className="border-b border-line px-4 py-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[13.5px] font-semibold">{col.label}</span>
+                      <span className="chip bg-line/60 text-muted">{doStatus.length}</span>
+                    </div>
+                    <p className="mt-0.5 text-[12px] tnum text-faint">{brl(valor)}</p>
                   </div>
+                  <ul className="flex-1 space-y-2 p-2.5">
+                    {doStatus.length === 0 && (
+                      <li className="rounded-xl border border-dashed border-line px-3 py-6 text-center text-[12.5px] text-faint">
+                        Arraste uma proposta para cá
+                      </li>
+                    )}
+                    {doStatus.map((p) => (
+                      <li
+                        key={p.id}
+                        draggable
+                        onDragStart={(e) => e.dataTransfer.setData('text/proposta', p.id)}
+                        className="cursor-grab rounded-xl border border-line bg-raised p-3 transition-colors hover:border-brand/50 active:cursor-grabbing"
+                      >
+                        <Link to={`/app/propostas/${p.id}`} className="block">
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono text-[11px] text-faint">{String(p.number).padStart(4, '0')}</span>
+                            {p.validUntil && new Date(p.validUntil) < new Date() && <Badge tone="warn">vencida</Badge>}
+                          </div>
+                          <p className="mt-1 truncate text-[14px] font-medium">{p.clientName}</p>
+                          <p className="truncate text-[11.5px] text-faint">{p.clientLocal ?? p.scopeTitle.slice(0, 40)}</p>
+                          <p className="mt-2 text-[15px] font-bold tnum">{brl(p.totalValue)}</p>
+                        </Link>
+                        <div className="mt-2 border-t border-line pt-2">
+                          <Select
+                            value={p.status}
+                            onChange={(e) => void moverStatus(p.id, e.target.value, p.number)}
+                            aria-label={`Estágio da proposta ${p.number}`}
+                            className="field-sm"
+                          >
+                            {Object.entries(STATUS_ROTULO).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                          </Select>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
                 </div>
-                <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[13px] text-muted">
-                  <span>{p.propostas.length} proposta(s)</span>
-                  {p.emAberto > 0 && <span className="font-medium text-warn">{p.emAberto} em aberto</span>}
-                  {p.ganhas > 0 && <span className="font-medium text-ok">{p.ganhas} fechada(s)</span>}
-                </div>
-                <p className="mt-2 text-[20px] font-bold tnum">{brl(p.total)}</p>
-                <ul className="mt-3 space-y-1.5 border-t border-line pt-3">
-                  {p.propostas.slice(0, 4).map((pr) => (
-                    <li key={pr.id}>
-                      <Link to={`/app/propostas/${pr.id}`} className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-[13px] transition-colors hover:bg-line/40">
-                        <span className="font-mono text-[11.5px] text-faint">{String(pr.number).padStart(4, '0')}</span>
-                        <Badge tone={STATUS_TOM[pr.status]}>{STATUS_ROTULO[pr.status]}</Badge>
-                        <span className="ml-auto tnum text-muted">{brl(pr.totalValue)}</span>
-                      </Link>
-                    </li>
-                  ))}
-                  {p.propostas.length > 4 && <li className="px-2 text-[12px] text-faint">+{p.propostas.length - 4} outra(s)</li>}
-                </ul>
-              </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {aba === 'ano' && (
+        <div className="space-y-5">
+          {porAno.length === 0 && (
+            <Empty icon={<FolderOpen size={24} />} title="Nenhuma proposta ainda" body="A pasta do ano nasce com a primeira proposta." />
+          )}
+          {porAno.map((ano) => (
+            <Card
+              key={ano.ano}
+              title={String(ano.ano)}
+              subtitle={`${ano.quantidade} proposta(s) no ano`}
+              action={<span className="text-[15px] font-bold tnum">{brl(ano.total)}</span>}
+            >
+              <ul className="space-y-3">
+                {ano.meses.map((m) => (
+                  <li key={m.mes} className="rounded-xl border border-line">
+                    <div className="flex flex-wrap items-center gap-3 border-b border-line px-4 py-2.5">
+                      <span className="text-[14px] font-semibold">{m.nome}</span>
+                      <span className="chip bg-line/60 text-muted">{m.propostas.length}</span>
+                      {m.ganhas > 0 && <span className="chip bg-ok/15 text-ok">{m.ganhas} fechada(s)</span>}
+                      <span className="ml-auto text-[14px] font-semibold tnum">{brl(m.total)}</span>
+                    </div>
+                    <ul className="divide-y divide-line">
+                      {m.propostas.map((pr) => (
+                        <li key={pr.id}>
+                          <Link to={`/app/propostas/${pr.id}`} className="flex flex-wrap items-center gap-3 px-4 py-2.5 transition-colors hover:bg-line/30">
+                            <span className="font-mono text-[11.5px] text-faint">{String(pr.number).padStart(4, '0')}</span>
+                            <Badge tone={STATUS_TOM[pr.status]}>{STATUS_ROTULO[pr.status]}</Badge>
+                            <span className="min-w-0 flex-1 truncate text-[14px] font-medium">{pr.clientName}</span>
+                            <span className="truncate text-[12px] text-faint">{pr.clientLocal ?? ''}</span>
+                            <span className="text-[14px] tnum">{brl(pr.totalValue)}</span>
+                            <span className="text-[12px] text-faint">{dOnly(pr.createdAt)}</span>
+                          </Link>
+                        </li>
+                      ))}
+                    </ul>
+                  </li>
+                ))}
+              </ul>
             </Card>
           ))}
         </div>

@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { prisma, D, nextNumber } from '../lib/prisma.js';
 import { badRequest, notFound, unprocessable } from '../lib/errors.js';
 import { enqueueMovement, enqueueSale, enqueueStock } from './sync.service.js';
+import { permiteFracao } from './compras.service.js';
 
 type Tx = Prisma.TransactionClient;
 
@@ -100,6 +101,12 @@ export async function criarVenda(input: CreateSaleInput) {
       const product = byId.get(item.productId);
       if (!product) throw notFound(`Produto ${item.productId} não encontrado.`);
       if (item.quantity <= 0) throw badRequest(`Quantidade inválida para "${product.name}".`);
+      // Item de unidade não vende fração (regra de 24/09) — ver stock.service.
+      if (!permiteFracao(product.unit) && item.quantity % 1 !== 0) {
+        throw badRequest(
+          `"${product.name}" é vendido por ${product.unit.toUpperCase()}: a quantidade precisa ser inteira (recebi ${item.quantity}).`,
+        );
+      }
 
       const stock = saldosTravados.get(item.productId)!;
       const qty = D(item.quantity);

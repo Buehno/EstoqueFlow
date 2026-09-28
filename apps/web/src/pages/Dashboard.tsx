@@ -37,10 +37,10 @@ export default function Dashboard() {
         <Stat label="Valor em estoque" value={brl(d.valorTotalEstoque)} sub={`${int(d.unidadesTotais)} unidades`} icon={<Boxes size={18} />} />
         <Stat label="Produtos ativos" value={int(d.produtosAtivos)} sub={`${d.depositos.length} depósito(s)`} icon={<Package size={18} />} />
         <Stat
-          label="Abaixo do mínimo"
-          value={int(d.alertas.abaixoMinimo)}
-          sub={d.alertas.abaixoMinimo ? 'Requer reposição' : 'Tudo em ordem'}
-          tone={d.alertas.abaixoMinimo ? 'danger' : 'ok'}
+          label="Alerta de compra"
+          value={int(d.alertas.alertaCompra)}
+          sub={d.alertas.atencao ? `${d.alertas.atencao} em atenção` : 'nenhum item em atenção'}
+          tone={d.alertas.alertaCompra ? 'danger' : d.alertas.atencao ? 'warn' : 'ok'}
           icon={<AlertTriangle size={18} />}
         />
         <Stat
@@ -98,7 +98,7 @@ export default function Dashboard() {
                 <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-[12.5px] text-muted">
                   <span>{int(w.skus)} SKUs</span>
                   <span>{int(w.unidades)} un.</span>
-                  {w.abaixoMinimo > 0 && <span className="font-semibold text-danger">{w.abaixoMinimo} abaixo do mínimo</span>}
+                  {w.semSaldo > 0 && <span className="text-faint">{w.semSaldo} sem saldo aqui</span>}
                 </div>
               </li>
             ))}
@@ -111,26 +111,40 @@ export default function Dashboard() {
 
       <div className="grid gap-6 xl:grid-cols-2">
         <Card
-          title="Reposição urgente"
-          subtitle="Produtos abaixo do estoque mínimo"
-          action={<Link to="/app/relatorios" className="btn-ghost btn-sm">Ver tudo</Link>}
+          title="Reposição"
+          subtitle="Pelo total dos dois depósitos — metade do mínimo dispara a compra"
+          action={<Link to="/app/relatorios" className="btn-ghost btn-sm">Ver relatório</Link>}
         >
           <Table
             rows={d.alertas.lista.slice(0, 8)}
-            keyOf={(r) => r.productId + r.warehouse}
-            empty={<Empty icon={<TrendingUp size={24} />} title="Nenhum produto abaixo do mínimo" body="Sua reposição está em dia." />}
+            keyOf={(r) => r.productId}
+            empty={<Empty icon={<TrendingUp size={24} />} title="Nenhum item pedindo reposição" body="Todo produto com mínimo definido está acima dele." />}
             columns={[
+              { key: 's', header: '', render: (r) => (
+                <Badge tone={r.situacao === 'ALERTA_COMPRA' ? 'danger' : 'warn'}>
+                  {r.situacao === 'ALERTA_COMPRA' ? 'comprar' : 'atenção'}
+                </Badge>
+              ) },
               { key: 'p', header: 'Produto', render: (r) => (
                 <div>
                   <p className="font-medium">{r.name}</p>
-                  <p className="font-mono text-[11.5px] text-faint">{r.sku} · {r.warehouse}</p>
+                  <p className="font-mono text-[11.5px] text-faint">
+                    {r.depositos.map((dep) => `${dep.code}: ${qty(dep.quantity)}`).join(' · ')}
+                  </p>
                 </div>
               ) },
-              { key: 'q', header: 'Saldo', align: 'right', render: (r) => qty(r.quantity) },
+              { key: 'q', header: 'Total', align: 'right', render: (r) => <b className="tnum">{qty(r.total)}</b> },
               { key: 'm', header: 'Mínimo', align: 'right', render: (r) => qty(r.minStock) },
-              { key: 'f', header: 'Falta', align: 'right', render: (r) => <span className="font-semibold text-danger">{qty(r.falta)}</span> },
+              { key: 'f', header: 'Falta', align: 'right', render: (r) => (
+                <span className={r.situacao === 'ALERTA_COMPRA' ? 'font-semibold text-danger' : 'font-semibold text-warn'}>{qty(r.falta)}</span>
+              ) },
             ]}
           />
+          {d.alertas.semMinimo > 0 && (
+            <p className="mt-3 text-[12.5px] text-faint">
+              {d.alertas.semMinimo} produto(s) ainda sem estoque mínimo definido — ficam fora do alerta até alguém definir a régua.
+            </p>
+          )}
         </Card>
 
         <Card
