@@ -1,188 +1,161 @@
 /**
  * compras-export.service
  *
- * O relatório de reposição em planilha, pedido em 24/09: "super detalhado,
- * seguindo o formato de planilha, mas com várias visões diferentes".
+ * A lista de reposição em planilha.
  *
- * Sai um .xlsx com seis abas, todas partindo do MESMO número — o total somado
- * dos dois depósitos:
- *   1. Resumo            — os números da decisão numa tela só
- *   2. Alerta de compra  — total <= 50% do mínimo (comprar agora)
- *   3. Atenção           — total <= mínimo (programar)
- *   4. Posição completa  — todos os produtos, com saldo de cada depósito
- *   5. Por categoria     — onde está concentrada a falta
- *   6. Por fornecedor    — o rascunho do pedido de cada um
- *   7. Sem mínimo        — produtos que ainda não têm régua de reposição
+ * Nasceu em 24/09 com sete abas (resumo, alerta, atenção, posição completa,
+ * por categoria, por fornecedor, sem mínimo). Na revisão de 30/09 o pedido
+ * ficou claro e mais simples: **uma lista só, do que precisa ser comprado
+ * agora** — os itens cujo total somado dos dois depósitos caiu para metade
+ * do estoque mínimo ou menos. As outras visões continuam na tela, em
+ * Relatórios; a planilha é o papel que vai para a compra.
+ *
+ * Uma aba, uma linha por peça, ordenada pela mais urgente (a que está
+ * proporcionalmente mais longe do mínimo), e uma linha de total no fim.
  */
 import ExcelJS from 'exceljs';
-import { porCategoria, porFornecedor, type LinhaCompra, type posicaoCompra } from './compras.service.js';
+import type { LinhaCompra, posicaoCompra } from './compras.service.js';
 
 type Posicao = Awaited<ReturnType<typeof posicaoCompra>>;
 
 const MOEDA = '"R$" #,##0.00';
-const CABECALHO = 'FFE8E8E8';
-const ALERTA = 'FFFCE4E2';
-const ATENCAO = 'FFFDF3DC';
+const CINZA_CABECALHO = 'FFE8E8E8';
+const VERMELHO_SUAVE = 'FFFCE4E2';
+const BORDA = { style: 'thin' as const, color: { argb: 'FFBFBFBF' } };
 
-const ROTULO: Record<string, string> = {
-  ALERTA_COMPRA: 'ALERTA DE COMPRA',
-  ATENCAO: 'ATENÇÃO',
-  OK: 'OK',
-  SEM_MINIMO: 'SEM MÍNIMO',
-};
-
-function cabecalho(ws: ExcelJS.Worksheet, colunas: { header: string; key: string; width: number }[]) {
-  ws.columns = colunas;
-  const linha = ws.getRow(1);
-  linha.height = 22;
-  linha.eachCell((c) => {
-    c.font = { name: 'Calibri', bold: true, size: 11 };
-    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: CABECALHO } };
-    c.alignment = { vertical: 'middle', wrapText: true };
-  });
-  ws.views = [{ state: 'frozen', ySplit: 1 }];
-}
-
-/** Uma linha de produto, no formato usado pelas abas 2, 3, 4 e 7. */
-function linhaProduto(i: LinhaCompra, depositos: Posicao['depositos']) {
-  const base: Record<string, unknown> = {
-    sku: i.sku,
-    name: i.name,
-    unit: i.unit,
-    size: i.size ?? '',
-    categoria: i.categoria ?? '',
-    fornecedor: i.fornecedor ?? '',
-  };
-  for (const d of depositos) {
-    base[`dep_${d.code}`] = i.depositos.find((x) => x.id === d.id)?.quantity ?? 0;
-  }
-  base.total = i.total;
-  base.minStock = i.minStock;
-  base.pontoCompra = i.pontoCompra;
-  base.situacao = ROTULO[i.situacao] ?? i.situacao;
-  base.comprar = i.comprarParaRepor;
-  base.custoMedio = i.custoMedio;
-  base.valorCompra = Number((i.comprarParaRepor * i.custoMedio).toFixed(2));
-  base.valorEstoque = i.valorEstoque;
-  base.saidas90 = i.saidas90;
-  base.cobertura = i.coberturaDias ?? '';
-  return base;
-}
-
-function colunasProduto(depositos: Posicao['depositos']) {
-  return [
-    { header: 'Código', key: 'sku', width: 14 },
-    { header: 'Produto', key: 'name', width: 46 },
-    { header: 'Un.', key: 'unit', width: 7 },
-    { header: 'Tamanho', key: 'size', width: 12 },
-    { header: 'Categoria', key: 'categoria', width: 18 },
-    { header: 'Fornecedor', key: 'fornecedor', width: 20 },
-    ...depositos.map((d) => ({ header: d.code, key: `dep_${d.code}`, width: 10 })),
-    { header: 'TOTAL', key: 'total', width: 11 },
-    { header: 'Estoque mínimo', key: 'minStock', width: 13 },
-    { header: 'Ponto de compra (50%)', key: 'pontoCompra', width: 14 },
-    { header: 'Situação', key: 'situacao', width: 18 },
-    { header: 'Comprar p/ repor', key: 'comprar', width: 14 },
-    { header: 'Custo médio', key: 'custoMedio', width: 12 },
-    { header: 'Valor da compra', key: 'valorCompra', width: 14 },
-    { header: 'Valor em estoque', key: 'valorEstoque', width: 14 },
-    { header: 'Saídas 90 dias', key: 'saidas90', width: 12 },
-    { header: 'Cobertura (dias)', key: 'cobertura', width: 13 },
-  ];
-}
-
-function pintarPorSituacao(ws: ExcelJS.Worksheet) {
-  ws.eachRow((row, n) => {
-    if (n === 1) return;
-    const situacao = String(row.getCell('situacao').value ?? '');
-    const cor = situacao === ROTULO.ALERTA_COMPRA ? ALERTA : situacao === ROTULO.ATENCAO ? ATENCAO : null;
-    if (cor) row.eachCell((c) => { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: cor } }; });
-    for (const key of ['custoMedio', 'valorCompra', 'valorEstoque']) row.getCell(key).numFmt = MOEDA;
-  });
-}
-
-function abaProdutos(wb: ExcelJS.Workbook, nome: string, itens: LinhaCompra[], depositos: Posicao['depositos'], vazio: string) {
-  const ws = wb.addWorksheet(nome, { views: [{ state: 'frozen', ySplit: 1 }] });
-  cabecalho(ws, colunasProduto(depositos));
-  if (!itens.length) {
-    ws.addRow({ name: vazio });
-    return ws;
-  }
-  for (const i of itens) ws.addRow(linhaProduto(i, depositos));
-  ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: ws.columnCount } };
-  pintarPorSituacao(ws);
-  return ws;
+/** Urgência: quanto menor a fração do mínimo que ainda resta, mais em cima. */
+function porUrgencia(a: LinhaCompra, b: LinhaCompra) {
+  const fa = a.minStock > 0 ? a.total / a.minStock : 1;
+  const fb = b.minStock > 0 ? b.total / b.minStock : 1;
+  return fa - fb || b.comprarParaRepor * b.custoMedio - a.comprarParaRepor * a.custoMedio;
 }
 
 export async function gerarRelatorioCompras(posicao: Posicao, empresa: string): Promise<Buffer> {
+  const itens = [...posicao.alerta].sort(porUrgencia);
+  const hoje = new Date();
+
   const wb = new ExcelJS.Workbook();
   wb.creator = empresa;
-  wb.created = new Date();
+  wb.created = hoje;
 
-  // 1. Resumo
-  const resumo = wb.addWorksheet('1. Resumo');
-  resumo.columns = [{ width: 38 }, { width: 22 }];
-  const titulo = resumo.addRow(['Relatório de reposição de estoque', '']);
-  titulo.font = { name: 'Calibri', bold: true, size: 16 };
-  resumo.addRow([empresa, new Date().toLocaleString('pt-BR')]);
-  resumo.addRow([]);
-  resumo.addRow(['Regra', 'Total dos dois depósitos']);
-  resumo.addRow(['Atenção', 'total igual ou abaixo do estoque mínimo']);
-  resumo.addRow(['Alerta de compra', 'total igual ou abaixo de 50% do mínimo']);
-  resumo.addRow([]);
-  const linhas: [string, number | string][] = [
-    ['Produtos ativos', posicao.resumo.produtos],
-    ['Em ALERTA DE COMPRA', posicao.resumo.alertaCompra],
-    ['Em ATENÇÃO', posicao.resumo.atencao],
-    ['OK', posicao.resumo.ok],
-    ['Sem mínimo definido', posicao.resumo.semMinimo],
-    ['Valor estimado da reposição', posicao.resumo.valorAComprar],
-    ['Valor total em estoque', posicao.resumo.valorEstoque],
+  const ws = wb.addWorksheet('Repor agora', {
+    pageSetup: { paperSize: 9, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+  });
+
+  const colunas = [
+    { header: 'Código', key: 'sku', width: 13 },
+    { header: 'Produto', key: 'name', width: 48 },
+    { header: 'Un.', key: 'unit', width: 6 },
+    { header: 'Categoria', key: 'categoria', width: 18 },
+    { header: 'Fornecedor', key: 'fornecedor', width: 20 },
+    ...posicao.depositos.map((d) => ({ header: d.code, key: `dep_${d.code}`, width: 9 })),
+    { header: 'TOTAL', key: 'total', width: 10 },
+    { header: 'Estoque mínimo', key: 'minStock', width: 13 },
+    { header: 'Dispara em (50%)', key: 'pontoCompra', width: 13 },
+    { header: 'COMPRAR', key: 'comprar', width: 11 },
+    { header: 'Custo médio', key: 'custoMedio', width: 12 },
+    { header: 'Valor estimado', key: 'valorCompra', width: 14 },
+    { header: 'Saídas 90 dias', key: 'saidas90', width: 12 },
+    { header: 'Cobertura (dias)', key: 'cobertura', width: 13 },
   ];
-  for (const [rotulo, valor] of linhas) {
-    const r = resumo.addRow([rotulo, valor]);
-    r.getCell(1).font = { name: 'Calibri', bold: true };
-    if (String(rotulo).startsWith('Valor')) r.getCell(2).numFmt = MOEDA;
-    if (rotulo === 'Em ALERTA DE COMPRA') r.eachCell((c) => { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: ALERTA } }; });
-    if (rotulo === 'Em ATENÇÃO') r.eachCell((c) => { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: ATENCAO } }; });
+
+  // ── Título ───────────────────────────────────────────────────────────────
+  ws.mergeCells(1, 1, 1, colunas.length);
+  const titulo = ws.getCell(1, 1);
+  titulo.value = 'Lista de reposição — itens no ponto de compra';
+  titulo.font = { name: 'Calibri', bold: true, size: 16 };
+  titulo.alignment = { vertical: 'middle' };
+  ws.getRow(1).height = 26;
+
+  ws.mergeCells(2, 1, 2, colunas.length);
+  const sub = ws.getCell(2, 1);
+  sub.value =
+    `${empresa} · ${hoje.toLocaleString('pt-BR')} · ` +
+    'critério: total somado dos depósitos igual ou abaixo de 50% do estoque mínimo';
+  sub.font = { name: 'Calibri', size: 10, color: { argb: 'FF666666' } };
+
+  ws.addRow([]);
+
+  // ── Cabeçalho da tabela ──────────────────────────────────────────────────
+  const linhaCabecalho = 4;
+  const cab = ws.getRow(linhaCabecalho);
+  cab.values = colunas.map((c) => c.header);
+  cab.height = 24;
+  cab.eachCell((c) => {
+    c.font = { name: 'Calibri', bold: true, size: 11 };
+    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: CINZA_CABECALHO } };
+    c.alignment = { vertical: 'middle', wrapText: true, horizontal: 'center' };
+    c.border = { top: BORDA, bottom: BORDA, left: BORDA, right: BORDA };
+  });
+  // as larguras seguem a ordem das colunas declaradas acima
+  colunas.forEach((c, i) => { ws.getColumn(i + 1).width = c.width; });
+
+  // ── Linhas ───────────────────────────────────────────────────────────────
+  if (!itens.length) {
+    ws.mergeCells(5, 1, 5, colunas.length);
+    const vazio = ws.getCell(5, 1);
+    vazio.value = 'Nenhum item atingiu o ponto de compra — nada a repor agora.';
+    vazio.font = { name: 'Calibri', italic: true, size: 11 };
   }
 
-  // 2 a 4 e 7. Listas de produtos
-  abaProdutos(wb, '2. Alerta de compra', posicao.alerta, posicao.depositos, 'Nenhum produto no alerta de compra.');
-  abaProdutos(wb, '3. Atencao', posicao.atencao, posicao.depositos, 'Nenhum produto em atenção.');
-  abaProdutos(wb, '4. Posicao completa', posicao.itens, posicao.depositos, 'Nenhum produto cadastrado.');
-
-  // 5. Por categoria
-  const cat = wb.addWorksheet('5. Por categoria');
-  cabecalho(cat, [
-    { header: 'Categoria', key: 'categoria', width: 28 },
-    { header: 'Produtos', key: 'produtos', width: 11 },
-    { header: 'Em alerta', key: 'alerta', width: 11 },
-    { header: 'Em atenção', key: 'atencao', width: 11 },
-    { header: 'Unidades', key: 'total', width: 13 },
-    { header: 'Valor em estoque', key: 'valor', width: 16 },
-    { header: 'Valor a comprar', key: 'comprar', width: 16 },
-  ]);
-  for (const l of porCategoria(posicao.itens)) {
-    const r = cat.addRow(l);
-    r.getCell('valor').numFmt = MOEDA;
-    r.getCell('comprar').numFmt = MOEDA;
+  let linha = linhaCabecalho;
+  for (const i of itens) {
+    linha += 1;
+    const valores: (string | number)[] = [
+      i.sku,
+      i.name,
+      i.unit,
+      i.categoria ?? '',
+      i.fornecedor ?? '',
+      ...posicao.depositos.map((d) => i.depositos.find((x) => x.id === d.id)?.quantity ?? 0),
+      i.total,
+      i.minStock,
+      i.pontoCompra,
+      i.comprarParaRepor,
+      i.custoMedio,
+      Number((i.comprarParaRepor * i.custoMedio).toFixed(2)),
+      i.saidas90,
+      i.coberturaDias ?? '',
+    ];
+    const row = ws.getRow(linha);
+    row.values = valores;
+    row.eachCell((c, col) => {
+      c.font = { name: 'Calibri', size: 11 };
+      c.alignment = { vertical: 'middle', horizontal: col <= 5 ? 'left' : 'right', wrapText: col === 2 };
+      c.border = { top: BORDA, bottom: BORDA, left: BORDA, right: BORDA };
+    });
+    // destaque na peça e no que comprar
+    row.getCell(2).font = { name: 'Calibri', size: 11, bold: true };
+    const colComprar = 5 + posicao.depositos.length + 4;
+    row.getCell(colComprar).font = { name: 'Calibri', size: 11, bold: true };
+    row.getCell(colComprar).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: VERMELHO_SUAVE } };
+    row.getCell(colComprar + 1).numFmt = MOEDA;
+    row.getCell(colComprar + 2).numFmt = MOEDA;
   }
 
-  // 6. Por fornecedor
-  const forn = wb.addWorksheet('6. Por fornecedor');
-  cabecalho(forn, [
-    { header: 'Fornecedor', key: 'fornecedor', width: 32 },
-    { header: 'Itens para comprar', key: 'itensParaComprar', width: 16 },
-    { header: 'Valor estimado', key: 'valor', width: 16 },
-  ]);
-  for (const l of porFornecedor(posicao.itens)) {
-    const r = forn.addRow(l);
-    r.getCell('valor').numFmt = MOEDA;
+  // ── Total ────────────────────────────────────────────────────────────────
+  if (itens.length) {
+    linha += 1;
+    const total = ws.getRow(linha);
+    const colComprar = 5 + posicao.depositos.length + 4;
+    ws.mergeCells(linha, 1, linha, colComprar - 1);
+    total.getCell(1).value = `${itens.length} item(ns) para repor`;
+    total.getCell(1).alignment = { horizontal: 'right' };
+    total.getCell(colComprar + 1).value = 'Total estimado';
+    total.getCell(colComprar + 1).alignment = { horizontal: 'right' };
+    total.getCell(colComprar + 2).value = Number(
+      itens.reduce((a, i) => a + i.comprarParaRepor * i.custoMedio, 0).toFixed(2),
+    );
+    total.getCell(colComprar + 2).numFmt = MOEDA;
+    total.height = 22;
+    total.eachCell((c) => {
+      c.font = { name: 'Calibri', bold: true, size: 11 };
+      c.border = { top: { style: 'double', color: { argb: 'FF999999' } } };
+    });
   }
 
-  // 7. Sem mínimo
-  abaProdutos(wb, '7. Sem minimo definido', posicao.semMinimo, posicao.depositos, 'Todos os produtos têm estoque mínimo definido.');
+  ws.autoFilter = { from: { row: linhaCabecalho, column: 1 }, to: { row: linhaCabecalho, column: colunas.length } };
+  ws.views = [{ state: 'frozen', xSplit: 2, ySplit: linhaCabecalho, topLeftCell: `C${linhaCabecalho + 1}` }];
 
   const buffer = await wb.xlsx.writeBuffer();
   return Buffer.from(buffer as unknown as ArrayBuffer);

@@ -101,9 +101,12 @@ export async function posicaoCompra(companyId: string) {
     const minStock = Number(p.minStock);
     const pontoCompra = minStock * 0.5;
     const saidas90 = consumo.get(p.id) ?? 0;
-    const custoMedio = p.stockItems.length
-      ? p.stockItems.reduce((a, s) => a + Number(s.avgCost) * Number(s.quantity), 0) / (total || 1)
-      : Number(p.costPrice);
+    // Custo médio ponderado pelo saldo. Achado na revisão de 30/09: quando o
+    // item está zerado (justamente o mais crítico para comprar), a média dava
+    // zero e o "valor estimado da compra" saía R$ 0,00. Sem saldo para
+    // ponderar, vale o custo de cadastro.
+    const somaValor = p.stockItems.reduce((a, s) => a + Number(s.avgCost) * Number(s.quantity), 0);
+    const custoMedio = total > 0 && somaValor > 0 ? somaValor / total : Number(p.costPrice);
 
     const situacao: SituacaoCompra =
       minStock <= 0 ? 'SEM_MINIMO'

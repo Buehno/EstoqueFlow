@@ -72,7 +72,7 @@ export default function Relatorios() {
       : compras.itens;
 
   const exportar = () => {
-    if (aba === 'compras') return api.download('/reports/compras/planilha', 'reposicao-estoque.xlsx');
+    if (aba === 'compras') return api.download('/reports/compras/planilha', 'lista-de-reposicao.xlsx');
     const map: Record<Aba, string> = { compras: 'estoque', posicao: 'estoque', abc: 'abc', giro: 'estoque', base: 'estoque' };
     api.download(`/reports/export/${map[aba]}`, `${aba}.csv`);
   };
@@ -112,7 +112,7 @@ export default function Relatorios() {
           <p className="mt-1 text-[14px] text-muted">Últimos 90 dias de movimentação como base de cálculo.</p>
         </div>
         <button onClick={exportar} className="btn-ghost btn-sm gap-2">
-          {aba === 'compras' ? <><FileSpreadsheet size={15} /> Baixar planilha completa</> : <><Download size={15} /> Exportar CSV</>}
+          {aba === 'compras' ? <><FileSpreadsheet size={15} /> Baixar lista de reposição</> : <><Download size={15} /> Exportar CSV</>}
         </button>
       </header>
 
@@ -210,7 +210,7 @@ export default function Relatorios() {
               ]}
             />
             <p className="mt-4 text-[12.5px] text-faint">
-              A planilha (botão no topo) traz sete visões: resumo, alerta, atenção, posição completa, por categoria, por fornecedor e sem mínimo.
+              A planilha (botão no topo) traz só o que precisa ser comprado agora — os itens no ponto de compra, com quanto pedir de cada um e o total estimado.
             </p>
           </Card>
         </>

@@ -18,7 +18,7 @@ export default async function reportsRoutes(app: FastifyInstance) {
   /** Posição de compra pelo TOTAL dos dois depósitos, já classificada. */
   app.get('/reports/compras', async (req) => posicaoCompra(req.user!.companyId));
 
-  /** O mesmo relatório em planilha, com as sete visões. */
+  /** A lista de reposição em planilha: só o que atingiu o ponto de compra. */
   app.get('/reports/compras/planilha', async (req, reply) => {
     const companyId = req.user!.companyId;
     const [posicao, empresa] = await Promise.all([
@@ -28,7 +28,7 @@ export default async function reportsRoutes(app: FastifyInstance) {
     const buffer = await gerarRelatorioCompras(posicao, empresa?.name ?? 'EstoqueFlow');
     const hoje = new Date().toISOString().slice(0, 10);
     reply.header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    reply.header('Content-Disposition', `attachment; filename="reposicao-estoque-${hoje}.xlsx"`);
+    reply.header('Content-Disposition', `attachment; filename="lista-de-reposicao-${hoje}.xlsx"`);
     return reply.send(buffer);
   });
 
