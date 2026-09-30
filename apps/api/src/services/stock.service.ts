@@ -483,6 +483,56 @@ export async function arredondarSaldosQuebrados(
 }
 
 /**
+ * ROTINA AUTOMÁTICA DE ARREDONDAMENTO — pedido reforçado em 30/09:
+ * "eu falei que devia ser automático".
+ *
+ * A regra é do negócio, não uma tarefa da equipe: peça vendida por unidade
+ * não tem meia peça. Então o sistema varre sozinho todas as empresas, no
+ * boot e de hora em hora, e arredonda o que estiver quebrado — sem ninguém
+ * precisar clicar em nada.
+ *
+ * Continua tudo rastreável: cada correção vira um AJUSTE no histórico, com
+ * saldo anterior, saldo novo e o motivo. O autor é o dono da conta (OWNER),
+ * porque todo movimento precisa de um responsável.
+ *
+ * Como toda movimentação nova já recusa fração em item de unidade
+ * (`assertQuantidadeInteira`), na prática esta varredura só tem trabalho na
+ * primeira rodada e depois fica ociosa.
+ */
+export async function arredondarTodasAsEmpresas(log?: { info: (o: unknown, m?: string) => void; warn: (o: unknown, m?: string) => void }) {
+  const empresas = await prisma.company.findMany({ where: { active: true }, select: { id: true, name: true } });
+  let totalCorrigido = 0;
+
+  for (const empresa of empresas) {
+    try {
+      const pendentes = await saldosQuebrados(empresa.id);
+      if (!pendentes.length) continue;
+
+      const responsavel =
+        (await prisma.user.findFirst({ where: { companyId: empresa.id, role: 'OWNER', active: true } })) ??
+        (await prisma.user.findFirst({ where: { companyId: empresa.id, active: true } }));
+      if (!responsavel) {
+        log?.warn({ empresa: empresa.name }, 'Saldos quebrados encontrados, mas a empresa não tem usuário ativo para assinar o ajuste.');
+        continue;
+      }
+
+      const r = await arredondarSaldosQuebrados(empresa.id, responsavel.id, {
+        dryRun: false,
+        motivo: 'Arredondamento automático — item vendido por unidade',
+      });
+      totalCorrigido += r.aplicados;
+      log?.info(
+        { empresa: empresa.name, corrigidos: r.aplicados, itens: r.itens.map((i) => `${i.name} ${i.atual}→${i.arredondado}`) },
+        'Saldos quebrados arredondados automaticamente.',
+      );
+    } catch (e) {
+      log?.warn({ empresa: empresa.name, err: String(e) }, 'Falha ao arredondar saldos desta empresa (as outras seguem).');
+    }
+  }
+  return totalCorrigido;
+}
+
+/**
  * DESATIVAR CADASTRO DUPLICADO — pedido de 24/09 (PDF "peças para ser
  * excluída - duplicidade").
  *

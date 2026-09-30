@@ -15,6 +15,7 @@ import { env, isProd } from './env.js';
 import { prisma } from './lib/prisma.js';
 import { AppError } from './lib/errors.js';
 import { startSyncWorkers } from './services/sync.service.js';
+import { arredondarTodasAsEmpresas } from './services/stock.service.js';
 
 import authRoutes from './routes/auth.routes.js';
 import catalogRoutes from './routes/catalog.routes.js';
@@ -206,6 +207,22 @@ try {
   }
 
   startSyncWorkers(app.log);
+
+  // Arredondamento automático dos saldos quebrados em item de unidade
+  // (pedido de 30/09). Roda logo depois que a porta abre e repete de hora em
+  // hora — é regra do negócio, não tarefa da equipe. Ver
+  // `arredondarTodasAsEmpresas` em stock.service.ts.
+  // `ARREDONDAR_AUTO=off` desliga a varredura — só as suítes de teste usam
+  // isso, para poderem criar um saldo quebrado de propósito e conferir a
+  // prévia antes de aplicar. Em produção fica sempre ligado.
+  if (process.env.ARREDONDAR_AUTO !== 'off') {
+    const varrerSaldosQuebrados = () =>
+      arredondarTodasAsEmpresas(app.log).catch((e) =>
+        app.log.warn({ err: String(e) }, 'Varredura de saldos quebrados falhou (a aplicação segue no ar).'),
+      );
+    setTimeout(varrerSaldosQuebrados, 15_000).unref();
+    setInterval(varrerSaldosQuebrados, 60 * 60 * 1000).unref();
+  }
 } catch (err) {
   app.log.error(err);
   process.exit(1);
