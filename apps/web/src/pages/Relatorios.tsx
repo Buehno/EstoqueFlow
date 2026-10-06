@@ -3,7 +3,7 @@ import { AlertTriangle, Copy, Download, FileSpreadsheet, Ruler, TrendingUp } fro
 import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import {
   api, ApiError,
-  type GrupoDuplicado, type LinhaCompra, type PosicaoCompra, type SaldoQuebrado, type StockRow,
+  type Fracionados, type GrupoDuplicado, type LinhaCompra, type PosicaoCompra, type SaldoQuebrado, type StockRow,
 } from '../lib/api';
 import { Badge, brl, Card, cx, Empty, int, qty, Spinner, Stat, Table, useToast } from '../lib/ui';
 import { useAuth } from '../App';
@@ -32,6 +32,7 @@ export default function Relatorios() {
   const [giro, setGiro] = useState<any[]>([]);
   const [compras, setCompras] = useState<PosicaoCompra | null>(null);
   const [quebrados, setQuebrados] = useState<SaldoQuebrado[]>([]);
+  const [fracionados, setFracionados] = useState<Fracionados | null>(null);
   const [duplicados, setDuplicados] = useState<GrupoDuplicado[]>([]);
   const [filtroCompra, setFiltroCompra] = useState<'alerta' | 'atencao' | 'semMinimo' | 'todos'>('alerta');
   const [loading, setLoading] = useState(true);
@@ -41,15 +42,16 @@ export default function Relatorios() {
   const podeCorrigir = me?.user.role === 'OWNER' || me?.user.role === 'ADMIN';
 
   const carregar = async () => {
-    const [s, a, g, c, q, d] = await Promise.all([
+    const [s, a, g, c, q, d, f] = await Promise.all([
       api.get<StockRow[]>('/stock?take=1000'),
       api.get<any[]>('/reports/abc?dias=90'),
       api.get<any[]>('/reports/giro?dias=90'),
       api.get<PosicaoCompra>('/reports/compras'),
       api.get<{ itens: SaldoQuebrado[] }>('/reports/saldos-quebrados'),
       api.get<{ grupos: GrupoDuplicado[] }>('/reports/duplicados'),
+      api.get<Fracionados>('/reports/fracionados'),
     ]);
-    setStock(s); setAbc(a); setGiro(g); setCompras(c); setQuebrados(q.itens); setDuplicados(d.grupos);
+    setStock(s); setAbc(a); setGiro(g); setCompras(c); setQuebrados(q.itens); setDuplicados(d.grupos); setFracionados(f);
     setLoading(false);
   };
 
@@ -307,6 +309,49 @@ export default function Relatorios() {
 
       {aba === 'base' && (
         <>
+          <Card
+            title="Unidades com casa decimal na base"
+            subtitle="Confira antes de corrigir: a plataforma só arredonda o que não é medida"
+          >
+            {!fracionados || fracionados.unidades.length === 0 ? (
+              <Empty icon={<Ruler size={24} />} title="Nenhum saldo com casa decimal" body="Toda a base está com número redondo ou em unidade de medida." />
+            ) : (
+              <>
+                <div className="mb-4 grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-xl border border-line bg-raised p-3.5">
+                    <p className="text-[12.5px] text-muted">Vai ser arredondado</p>
+                    <p className="text-[20px] font-bold tnum text-warn">{int(fracionados.aArredondar)}</p>
+                  </div>
+                  <div className="rounded-xl border border-line bg-raised p-3.5">
+                    <p className="text-[12.5px] text-muted">Preservado (é metragem/peso/volume)</p>
+                    <p className="text-[20px] font-bold tnum text-ok">{int(fracionados.preservados)}</p>
+                  </div>
+                </div>
+                <Table
+                  rows={fracionados.unidades}
+                  keyOf={(u) => u.normalizada}
+                  columns={[
+                    { key: 'u', header: 'Unidade cadastrada', render: (u) => (
+                      <div><p className="font-medium">{u.unidade}</p><p className="font-mono text-[11.5px] text-faint">lida como {u.normalizada}</p></div>
+                    ) },
+                    { key: 't', header: 'Tratamento', render: (u) => (
+                      <Badge tone={u.medida ? 'ok' : 'warn'}>{u.medida ? 'medida · preserva a fração' : 'unidade · arredonda'}</Badge>
+                    ) },
+                    { key: 'q', header: 'Saldos quebrados', align: 'right', render: (u) => int(u.saldosQuebrados) },
+                    { key: 'p', header: 'Produtos', align: 'right', render: (u) => int(u.produtos) },
+                    { key: 'e', header: 'Exemplos', render: (u) => (
+                      <span className="text-[12.5px] text-muted">{u.exemplos.slice(0, 2).join(' · ')}</span>
+                    ) },
+                  ]}
+                />
+                <p className="mt-4 text-[12.5px] text-faint">
+                  Se alguma unidade de medida estiver marcada como “arredonda”, corrija a unidade no
+                  cadastro do produto (MT, M², KG, L…) antes de mandar arredondar.
+                </p>
+              </>
+            )}
+          </Card>
+
           <Card
             title={`${quebrados.length} saldo(s) quebrado(s) em item de unidade`}
             subtitle="Peça vendida por unidade não pode ter casa decimal — metro, quilo e litro podem"

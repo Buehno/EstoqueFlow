@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, Star, Warehouse } from 'lucide-react';
+import { Plus, Search, SlidersHorizontal, Star, Warehouse } from 'lucide-react';
 import { api, ApiError, type StockRow, type Warehouse as W } from '../lib/api';
 import { Badge, brl, Card, Empty, Field, Input, int, Modal, qty, Spinner, Table, useToast } from '../lib/ui';
 
@@ -9,6 +9,12 @@ export default function Depositos() {
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(false);
   const [editing, setEditing] = useState<W | null>(null);
+  const [busca, setBusca] = useState('');
+  // Ajuste manual de saldo direto na posição detalhada (pedido de 06/10):
+  // a equipe precisa acertar o saldo de um item sem passar pela tela de
+  // movimentação. Continua gerando um movimento de AJUSTE rastreável.
+  const [ajustando, setAjustando] = useState<StockRow | null>(null);
+  const [salvandoAjuste, setSalvandoAjuste] = useState(false);
   const toast = useToast();
 
   const load = async () => {
@@ -36,6 +42,28 @@ export default function Depositos() {
     }
   };
 
+  const aplicarAjuste = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!ajustando) return;
+    const f = Object.fromEntries(new FormData(e.currentTarget)) as Record<string, string>;
+    setSalvandoAjuste(true);
+    try {
+      await api.post('/movements/ajuste', {
+        productId: ajustando.productId,
+        warehouseId: ajustando.warehouseId,
+        newQuantity: Number(String(f.newQuantity).replace(',', '.')),
+        reason: f.reason?.trim() || 'Ajuste manual de saldo',
+      });
+      toast({ kind: 'ok', title: 'Saldo ajustado', body: `${ajustando.name} · ${ajustando.warehouseCode}` });
+      setAjustando(null);
+      void load();
+    } catch (err) {
+      toast({ kind: 'err', title: 'Não foi possível ajustar', body: err instanceof ApiError ? err.message : undefined });
+    } finally {
+      setSalvandoAjuste(false);
+    }
+  };
+
   const resumo = (id: string) => {
     const rows = stock.filter((s) => s.warehouseId === id);
     return {
@@ -45,6 +73,11 @@ export default function Depositos() {
       alertas: rows.filter((r) => r.belowMin).length,
     };
   };
+
+  const termo = busca.trim().toLowerCase();
+  const visiveis = termo
+    ? stock.filter((r) => `${r.name} ${r.sku} ${r.barcode ?? ''}`.toLowerCase().includes(termo))
+    : stock.slice(0, 300);
 
   if (loading) return <Spinner />;
 
@@ -92,9 +125,23 @@ export default function Depositos() {
         })}
       </div>
 
-      <Card title="Posição detalhada" subtitle="Saldo de cada produto em cada depósito">
+      <Card
+        title="Posição detalhada"
+        subtitle="Saldo de cada produto em cada depósito — clique em Ajustar para corrigir o saldo na hora"
+        action={
+          <label className="relative block w-full sm:w-72">
+            <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-faint" />
+            <Input
+              value={busca}
+              onChange={(e) => setBusca(e.currentTarget.value)}
+              placeholder="Buscar por produto ou código"
+              className="pl-9"
+            />
+          </label>
+        }
+      >
         <Table
-          rows={stock}
+          rows={visiveis}
           keyOf={(r) => r.productId + r.warehouseId}
           empty={<Empty icon={<Warehouse size={24} />} title="Sem saldo registrado" body="Faça a primeira entrada para ver a posição aqui." />}
           columns={[
@@ -108,8 +155,18 @@ export default function Depositos() {
             { key: 'm', header: 'Mínimo', align: 'right', render: (r) => qty(r.minStock) },
             { key: 'c', header: 'Custo médio', align: 'right', render: (r) => brl(r.avgCost) },
             { key: 'v', header: 'Valor', align: 'right', render: (r) => <b>{brl(r.stockValue)}</b> },
+            { key: 'a', header: '', align: 'right', render: (r) => (
+              <button onClick={() => setAjustando(r)} className="btn-ghost btn-sm gap-1.5 whitespace-nowrap">
+                <SlidersHorizontal size={14} /> Ajustar
+              </button>
+            ) },
           ]}
         />
+        {stock.length > visiveis.length && (
+          <p className="px-1 pt-3 text-[13px] text-muted">
+            Mostrando {int(visiveis.length)} de {int(stock.length)} linhas. Use a busca para encontrar um item.
+          </p>
+        )}
       </Card>
 
       <Modal open={modal} onClose={() => { setModal(false); setEditing(null); }} title={editing ? 'Editar depósito' : 'Novo depósito'}>
@@ -129,6 +186,42 @@ export default function Depositos() {
             <button type="submit" className="btn-primary">Salvar</button>
           </div>
         </form>
+      </Modal>
+      <Modal
+        open={!!ajustando}
+        onClose={() => setAjustando(null)}
+        title="Ajustar saldo manualmente"
+      >
+        {ajustando && (
+          <form onSubmit={aplicarAjuste} className="space-y-4">
+            <div className="rounded-xl border border-line bg-raised p-3.5">
+              <p className="text-[15px] font-semibold leading-tight">{ajustando.name}</p>
+              <p className="mt-0.5 font-mono text-[11.5px] text-faint">{ajustando.sku}</p>
+              <p className="mt-2 text-[13px] text-muted">
+                {ajustando.warehouse} · saldo atual <b className="tnum">{qty(ajustando.quantity)} {ajustando.unit}</b>
+              </p>
+            </div>
+            <Field
+              label="Novo saldo"
+              required
+              hint={`Informe a contagem real. ${ajustando.unit.toUpperCase()} vendido por unidade aceita só número inteiro.`}
+            >
+              <Input name="newQuantity" type="number" step="0.001" min="0" required autoFocus defaultValue={ajustando.quantity} />
+            </Field>
+            <Field label="Motivo" hint="Fica registrado no histórico junto com o seu nome.">
+              <Input name="reason" placeholder="Ex.: recontagem na prateleira" />
+            </Field>
+            <p className="text-[12.5px] text-faint">
+              O ajuste não apaga nada: gera um movimento de AJUSTE com o saldo antes e depois.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setAjustando(null)} className="btn-ghost">Cancelar</button>
+              <button type="submit" disabled={salvandoAjuste} className="btn-primary">
+                {salvandoAjuste ? 'Aplicando…' : 'Aplicar ajuste'}
+              </button>
+            </div>
+          </form>
+        )}
       </Modal>
     </div>
   );

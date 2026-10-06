@@ -19,14 +19,63 @@
  */
 import { prisma } from '../lib/prisma.js';
 
-/** Unidades vendidas por medida — nelas o saldo quebrado é legítimo. */
+/**
+ * Unidades vendidas por medida — nelas o saldo com casa decimal é legítimo
+ * (12,5 metros de tubo é um saldo real; 2,333 cotovelos não é).
+ *
+ * A lista é ampla de propósito: a unidade é texto livre no cadastro, então a
+ * mesma coisa chega escrita de várias formas ("MT", "MTS", "metro", "m²",
+ * "M LINEAR"). Tudo é comparado depois de `normalizarUnidade`, que tira
+ * acento, pontuação, espaço e maiúscula e troca ² ³ por 2 3. Na dúvida a
+ * unidade é tratada como MEDIDA — assim um erro de grafia no cadastro nunca
+ * arredonda (e perde) um saldo que era legítimo.
+ */
 export const UNIDADES_FRACIONADAS = new Set([
-  'MT', 'M', 'CM', 'MM', 'M2', 'M²', 'M3', 'M³', 'KG', 'G', 'L', 'ML', 'TON',
+  // comprimento
+  'M', 'MT', 'MTS', 'MTR', 'MTRS', 'METRO', 'METROS', 'MC', 'ML', 'MLIN',
+  'MLINEAR', 'METROLINEAR', 'METROSLINEARES', 'CM', 'MM', 'KM', 'POL', 'POLEGADA', 'POLEGADAS',
+  // área e volume
+  'M2', 'MT2', 'METRO2', 'METROQUADRADO', 'METROSQUADRADOS', 'CM2',
+  'M3', 'MT3', 'METRO3', 'METROCUBICO', 'METROSCUBICOS', 'CM3',
+  'L', 'LT', 'LTS', 'LITRO', 'LITROS', 'ML3', 'MILILITRO', 'GL', 'GALAO', 'GALOES',
+  // peso
+  'KG', 'KGS', 'QUILO', 'QUILOS', 'G', 'GR', 'GRS', 'GRAMA', 'GRAMAS',
+  'TON', 'TONS', 'TONELADA', 'TONELADAS',
 ]);
+
+/**
+ * Deixa a unidade comparável: sem acento, sem pontuação, sem espaço, em
+ * maiúscula, com ² e ³ virando 2 e 3. "m²" → "M2", " Mts. " → "MTS",
+ * "metro linear" → "METROLINEAR".
+ */
+export function normalizarUnidade(unit?: string | null): string {
+  return (unit ?? 'UN')
+    .normalize('NFD')
+    .replace(/\u00b2/g, '2')
+    .replace(/\u00b3/g, '3')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '')
+    || 'UN';
+}
 
 /** `true` quando o produto pode ter saldo com casa decimal (metro, quilo…). */
 export function permiteFracao(unit?: string | null): boolean {
-  return UNIDADES_FRACIONADAS.has((unit ?? 'UN').trim().toUpperCase());
+  const u = normalizarUnidade(unit);
+  if (UNIDADES_FRACIONADAS.has(u)) return true;
+  // Grafias compostas que começam por metro/litro/quilo ("METROSDETUBO",
+  // "LITROSDETINTA") também são medida.
+  return /^(METRO|METROS|LITRO|LITROS|QUILO|QUILOS|TONELADA|POLEGADA)/.test(u);
+}
+
+/**
+ * O saldo arredondado de um item de unidade. Arredonda para o inteiro mais
+ * próximo, com uma trava: saldo positivo nunca vira zero — 0,4 peça é uma
+ * peça que está na prateleira, e zerar apagaria estoque real.
+ */
+export function arredondarSaldo(atual: number): number {
+  if (atual <= 0) return 0;
+  return Math.max(1, Math.round(atual));
 }
 
 export type SituacaoCompra = 'ALERTA_COMPRA' | 'ATENCAO' | 'OK' | 'SEM_MINIMO';
@@ -209,7 +258,7 @@ export async function saldosQuebrados(companyId: string) {
     .filter((r) => !permiteFracao(r.product.unit) && Number(r.quantity) % 1 !== 0)
     .map((r) => {
       const atual = Number(r.quantity);
-      const arredondado = Math.round(atual);
+      const arredondado = arredondarSaldo(atual);
       return {
         productId: r.productId,
         sku: r.product.sku,
@@ -224,6 +273,51 @@ export async function saldosQuebrados(companyId: string) {
       };
     })
     .sort((a, b) => Math.abs(b.diferenca) - Math.abs(a.diferenca));
+}
+
+/**
+ * Radiografia de TODO saldo com casa decimal na empresa, agrupado por
+ * unidade — serve para conferir, antes de qualquer correção, quais unidades
+ * a plataforma está tratando como medida e quais vai arredondar. Pedido de
+ * 06/10 ("olhe o sistema todo"): sem essa visão, um cadastro escrito "MTS"
+ * ou "metro" poderia ser arredondado por engano.
+ */
+export async function radiografiaFracionados(companyId: string) {
+  const rows = await prisma.stockItem.findMany({
+    where: { product: { companyId } },
+    include: { product: { select: { unit: true, active: true, name: true, sku: true } } },
+  });
+
+  const porUnidade = new Map<
+    string,
+    { unidade: string; normalizada: string; medida: boolean; saldosQuebrados: number; produtos: Set<string>; exemplos: string[] }
+  >();
+
+  for (const r of rows) {
+    const atual = Number(r.quantity);
+    if (atual % 1 === 0) continue;
+    const unidade = (r.product.unit ?? 'UN').trim() || 'UN';
+    const normalizada = normalizarUnidade(unidade);
+    const atual_ = porUnidade.get(normalizada) ?? {
+      unidade, normalizada, medida: permiteFracao(unidade),
+      saldosQuebrados: 0, produtos: new Set<string>(), exemplos: [],
+    };
+    atual_.saldosQuebrados += 1;
+    atual_.produtos.add(r.productId);
+    if (atual_.exemplos.length < 5) atual_.exemplos.push(`${r.product.sku} · ${r.product.name} = ${atual}`);
+    porUnidade.set(normalizada, atual_);
+  }
+
+  const lista = [...porUnidade.values()]
+    .map((u) => ({ ...u, produtos: u.produtos.size }))
+    .sort((a, b) => b.saldosQuebrados - a.saldosQuebrados);
+
+  return {
+    unidades: lista,
+    aArredondar: lista.filter((u) => !u.medida).reduce((a, u) => a + u.saldosQuebrados, 0),
+    preservados: lista.filter((u) => u.medida).reduce((a, u) => a + u.saldosQuebrados, 0),
+    unidadesTratadasComoMedida: lista.filter((u) => u.medida).map((u) => u.unidade),
+  };
 }
 
 /**

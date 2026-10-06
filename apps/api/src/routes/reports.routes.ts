@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { authenticate, requireRole, CAN_MANAGE } from '../lib/auth.js';
 import { curvaABC, dashboard, giroEstoque, kardex, vendasPorDia } from '../services/reports.service.js';
-import { duplicados, posicaoCompra, saldosQuebrados } from '../services/compras.service.js';
+import { duplicados, posicaoCompra, radiografiaFracionados, saldosQuebrados } from '../services/compras.service.js';
 import { gerarRelatorioCompras } from '../services/compras-export.service.js';
 import { arredondarSaldosQuebrados, desativarProdutoDuplicado } from '../services/stock.service.js';
 import { fullResync, runGuard, runSync, sheetsEnabled } from '../services/sync.service.js';
@@ -38,6 +38,13 @@ export default async function reportsRoutes(app: FastifyInstance) {
     const itens = await saldosQuebrados(req.user!.companyId);
     return { total: itens.length, itens };
   });
+
+  /**
+   * Radiografia de todo saldo com casa decimal, agrupado por unidade: mostra
+   * quais unidades a plataforma trata como MEDIDA (e por isso preserva) e
+   * quais vai arredondar. É a conferência antes de corrigir.
+   */
+  app.get('/reports/fracionados', async (req) => radiografiaFracionados(req.user!.companyId));
 
   /** Arredonda os saldos quebrados gerando um AJUSTE rastreável por item. */
   app.post('/reports/saldos-quebrados/arredondar', { preHandler: requireRole(...CAN_MANAGE) }, async (req) => {

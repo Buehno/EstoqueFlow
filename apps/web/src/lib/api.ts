@@ -116,6 +116,16 @@ export interface SaldoQuebrado {
   warehouseId: string; warehouse: string; warehouseCode: string;
   atual: number; arredondado: number; diferenca: number;
 }
+/** Radiografia de todo saldo com casa decimal, agrupado por unidade. */
+export interface Fracionados {
+  unidades: {
+    unidade: string; normalizada: string; medida: boolean;
+    saldosQuebrados: number; produtos: number; exemplos: string[];
+  }[];
+  aArredondar: number;
+  preservados: number;
+  unidadesTratadasComoMedida: string[];
+}
 export interface GrupoDuplicado {
   chave: string;
   produtos: {
