@@ -28,7 +28,6 @@ import {
   AlignmentType,
   BorderStyle,
   Document,
-  Footer,
   ImageRun,
   Packer,
   Paragraph,
@@ -43,7 +42,7 @@ import {
 import ExcelJS from 'exceljs';
 import type {
   Content,
-  ContentText,
+  ContentStack,
   StyleDictionary,
   TableCell as PdfTableCell,
   TDocumentDefinitions,
@@ -128,9 +127,17 @@ function encaixar(dim: { width: number; height: number }, maxW: number, maxH: nu
 /* Constantes de marca / formatação                                    */
 /* ------------------------------------------------------------------ */
 
-const RAZAO_SOCIAL = 'Comércio de Aquecedores Ltda';
-const ESPECIALIDADES =
-  'Aquecedores Solares · Aquecedores para Piscina · Aquecedores a Gás · Instalações de Hidráulica e Elétrica';
+/**
+ * Cabeçalho no formato do modelo manual da equipe (pedido da Driele, 16/10):
+ * logotipo à esquerda e, à direita, o bloco em vermelho com o nome, a razão
+ * social e as duas linhas de especialidades — igual ao papel timbrado.
+ */
+const MARCA_NOME = 'Jund Aquece';
+const RAZAO_SOCIAL = 'Comércio de Aquecedores Ltda – ME';
+const ESPECIALIDADES_1 = 'Aquecedores Solares – Aquecedores para Piscina';
+const ESPECIALIDADES_2 = 'Aquecedores a Gás – Instalações de Hidráulica e Elétrica';
+const VERMELHO_MARCA = 'FF0000';
+const AZUL_LINK = '0563C1';
 const DEPARTAMENTO = 'Dpt°.: Vendas';
 
 const CINZA_CABECALHO = 'E8E8E8';
@@ -286,9 +293,12 @@ function registrarFontes(): void {
 }
 
 const ESTILOS_PDF: StyleDictionary = {
-  marca: { fontSize: 26, bold: true, alignment: 'center', characterSpacing: 3, color: '#1F3864' },
-  marcaSub: { fontSize: 10, alignment: 'center', color: '#333333', margin: [0, 2, 0, 0] },
-  marcaEspec: { fontSize: 7.5, alignment: 'center', color: CINZA_TEXTO, margin: [0, 3, 0, 0] },
+  marca: { fontSize: 11, bold: true, alignment: 'right', color: `#${VERMELHO_MARCA}` },
+  marcaSub: { fontSize: 9.5, bold: true, alignment: 'right', color: `#${VERMELHO_MARCA}`, margin: [0, 1, 0, 0] },
+  marcaEspec: { fontSize: 8.5, alignment: 'right', color: `#${VERMELHO_MARCA}`, margin: [0, 1, 0, 0] },
+  rodapeEndereco: { fontSize: 8, bold: true, alignment: 'center', color: `#${VERMELHO_MARCA}` },
+  rodapeLink: { fontSize: 8, alignment: 'center', color: `#${AZUL_LINK}`, decoration: 'underline' },
+  rodapeContato: { fontSize: 8, bold: true, alignment: 'center', color: '#1A1A1A' },
   cliente: { fontSize: 10, alignment: 'left', margin: [0, 0, 0, 2] },
   titulo: { fontSize: 16, bold: true, alignment: 'center', characterSpacing: 1, margin: [0, 14, 0, 2] },
   tituloSub: { fontSize: 9.5, alignment: 'center', color: CINZA_TEXTO, margin: [0, 0, 0, 10] },
@@ -296,7 +306,6 @@ const ESTILOS_PDF: StyleDictionary = {
   corpo: { fontSize: 9.5, alignment: 'justify', margin: [0, 0, 0, 3] },
   secao: { fontSize: 10.5, bold: true, margin: [0, 10, 0, 3] },
   th: { fontSize: 9.5, bold: true, margin: [0, 4, 0, 4] },
-  rodape: { fontSize: 7.5, alignment: 'center', color: CINZA_TEXTO },
 };
 
 const LAYOUT_TABELA = {
@@ -338,15 +347,31 @@ function dicionarioImagensPdf(p: PropostaExport, chaves: ReturnType<typeof chave
 function conteudoPdf(p: PropostaExport, chaves: ReturnType<typeof chavesImagensPdf>): Content[] {
   const c: Content[] = [];
 
-  // 1. Cabeçalho da empresa — logotipo real quando cadastrado, tipografia como fallback.
-  if (chaves.logo) {
-    c.push({ image: chaves.logo, width: 130, alignment: 'center', margin: [0, 0, 0, 4] });
-  } else {
-    c.push({ text: p.empresa.nome, style: 'marca' });
-  }
-  c.push({ text: RAZAO_SOCIAL, style: 'marcaSub' });
-  c.push({ text: ESPECIALIDADES, style: 'marcaEspec' });
-  c.push(regua([0, 8, 0, 12]));
+  // 1. Cabeçalho da empresa, no formato do papel timbrado: logotipo à esquerda,
+  //    bloco vermelho à direita, filete vermelho embaixo.
+  const blocoMarca: ContentStack & { width: string } = {
+    width: '*',
+    stack: [
+      { text: MARCA_NOME, style: 'marca' },
+      { text: RAZAO_SOCIAL, style: 'marcaSub' },
+      { text: ESPECIALIDADES_1, style: 'marcaEspec' },
+      { text: ESPECIALIDADES_2, style: 'marcaEspec' },
+    ],
+    margin: [0, 4, 0, 0],
+  };
+  c.push({
+    columns: [
+      chaves.logo
+        ? { image: chaves.logo, width: 150, margin: [0, 0, 0, 0] }
+        : { width: 150, text: p.empresa.nome, fontSize: 22, bold: true, color: `#${VERMELHO_MARCA}` },
+      blocoMarca,
+    ],
+    columnGap: 12,
+  });
+  c.push({
+    canvas: [{ type: 'line', x1: 0, y1: 0, x2: 515, y2: 0, lineWidth: 1.2, lineColor: `#${VERMELHO_MARCA}` }],
+    margin: [0, 6, 0, 12],
+  });
 
   // 2. Bloco do cliente.
   c.push({ text: [{ text: 'CLIENTE: ', bold: true }, p.cliente.nome], style: 'cliente' });
@@ -477,23 +502,23 @@ function conteudoPdf(p: PropostaExport, chaves: ReturnType<typeof chavesImagensP
   return c;
 }
 
+/**
+ * Rodapé com endereço, e-mail, site e telefone SÓ NA ÚLTIMA PÁGINA — pedido da
+ * Driele (16/10): as páginas do meio ficam limpas, como no modelo manual.
+ */
 function rodapePdf(p: PropostaExport) {
-  return (paginaAtual: number, totalPaginas: number): Content => ({
-    margin: [40, 6, 40, 0],
-    stack: [
-      { canvas: [{ type: 'line', x1: 0, y1: 0, x2: 515, y2: 0, lineWidth: 0.6, lineColor: '#B5B5B5' }] },
-      { text: p.empresa.endereco, style: 'rodape', margin: [0, 4, 0, 0] },
-      { text: `${p.empresa.email}  ·  ${p.empresa.site}`, style: 'rodape' },
-      { text: `PABX: ${p.empresa.telefone}`, style: 'rodape' },
-      {
-        text: `página ${paginaAtual} de ${totalPaginas}`,
-        fontSize: 7,
-        alignment: 'center',
-        color: '#8A8A8A',
-        margin: [0, 2, 0, 0],
-      } as ContentText,
-    ],
-  });
+  return (paginaAtual: number, totalPaginas: number): Content => {
+    if (paginaAtual !== totalPaginas) return { text: '' };
+    return {
+      margin: [40, 4, 40, 0],
+      stack: [
+        { canvas: [{ type: 'line', x1: 0, y1: 0, x2: 515, y2: 0, lineWidth: 1.2, lineColor: `#${VERMELHO_MARCA}` }] },
+        { text: p.empresa.endereco, style: 'rodapeEndereco', margin: [0, 4, 0, 0] },
+        { text: `${p.empresa.email}          ${p.empresa.site}`, style: 'rodapeLink' },
+        { text: `CONTATO: ${p.empresa.telefone}`, style: 'rodapeContato' },
+      ],
+    };
+  };
 }
 
 export async function gerarPdf(p: PropostaExport): Promise<Buffer> {
@@ -502,7 +527,7 @@ export async function gerarPdf(p: PropostaExport): Promise<Buffer> {
   const chaves = chavesImagensPdf(p);
   const doc: TDocumentDefinitions = {
     pageSize: 'A4',
-    pageMargins: [40, 40, 40, 78],
+    pageMargins: [40, 40, 40, 70],
     defaultStyle: { font: 'Roboto', fontSize: 9.5, lineHeight: 1.15, color: '#1A1A1A' },
     styles: ESTILOS_PDF,
     images: dicionarioImagensPdf(p, chaves),
@@ -653,15 +678,53 @@ function tabelaDocx(p: PropostaExport): Table {
 export async function gerarDocx(p: PropostaExport): Promise<Buffer> {
   const filhos: (Paragraph | Table)[] = [];
 
-  // 1. Cabeçalho da empresa — logotipo real quando cadastrado, tipografia como fallback.
-  const logo = imagemDocx(p.logoBase64, 220, 90);
-  if (logo) {
-    filhos.push(new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 40 }, children: [logo] }));
-  } else {
-    filhos.push(par(p.empresa.nome, { bold: true, size: 26, align: AlignmentType.CENTER, color: '1F3864', caracteres: 40, depois: 2 }));
-  }
-  filhos.push(par(RAZAO_SOCIAL, { size: 10, align: AlignmentType.CENTER, color: '333333', depois: 1 }));
-  filhos.push(par(ESPECIALIDADES, { size: 7.5, align: AlignmentType.CENTER, color: CINZA_TEXTO, depois: 10 }));
+  // 1. Cabeçalho da empresa no formato do papel timbrado: logotipo à esquerda,
+  //    bloco vermelho à direita (tabela sem bordas), filete vermelho embaixo.
+  const logo = imagemDocx(p.logoBase64, 200, 80);
+  const semBorda = { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' };
+  const celulaLivre = (filhosCelula: Paragraph[], largura: number) =>
+    new TableCell({
+      width: { size: largura, type: WidthType.DXA },
+      borders: { top: semBorda, bottom: semBorda, left: semBorda, right: semBorda },
+      verticalAlign: VerticalAlign.CENTER,
+      children: filhosCelula,
+    });
+  filhos.push(
+    new Table({
+      width: { size: 9360, type: WidthType.DXA },
+      columnWidths: [4000, 5360],
+      rows: [
+        new TableRow({
+          children: [
+            celulaLivre(
+              [
+                logo
+                  ? new Paragraph({ alignment: AlignmentType.LEFT, spacing: { after: 0 }, children: [logo] })
+                  : par(p.empresa.nome, { bold: true, size: 22, color: VERMELHO_MARCA, depois: 0 }),
+              ],
+              4000,
+            ),
+            celulaLivre(
+              [
+                par(MARCA_NOME, { bold: true, size: 11, align: AlignmentType.RIGHT, color: VERMELHO_MARCA, depois: 0 }),
+                par(RAZAO_SOCIAL, { bold: true, size: 9.5, align: AlignmentType.RIGHT, color: VERMELHO_MARCA, depois: 0 }),
+                par(ESPECIALIDADES_1, { size: 8.5, align: AlignmentType.RIGHT, color: VERMELHO_MARCA, depois: 0 }),
+                par(ESPECIALIDADES_2, { size: 8.5, align: AlignmentType.RIGHT, color: VERMELHO_MARCA, depois: 0 }),
+              ],
+              5360,
+            ),
+          ],
+        }),
+      ],
+    }),
+  );
+  filhos.push(
+    new Paragraph({
+      spacing: { before: 60, after: 160 },
+      border: { bottom: { style: BorderStyle.SINGLE, size: 12, color: VERMELHO_MARCA, space: 1 } },
+      children: [],
+    }),
+  );
 
   // 2. Cliente.
   filhos.push(parRico([{ texto: 'CLIENTE: ', bold: true }, { texto: p.cliente.nome }], { size: 10 }));
@@ -744,14 +807,28 @@ export async function gerarDocx(p: PropostaExport): Promise<Buffer> {
     );
   }
 
-  // 14. Rodapé.
-  const rodape = new Footer({
-    children: [
-      par(p.empresa.endereco, { size: 7.5, align: AlignmentType.CENTER, color: CINZA_TEXTO, depois: 0 }),
-      par(`${p.empresa.email}  ·  ${p.empresa.site}`, { size: 7.5, align: AlignmentType.CENTER, color: CINZA_TEXTO, depois: 0 }),
-      par(`PABX: ${p.empresa.telefone}`, { size: 7.5, align: AlignmentType.CENTER, color: CINZA_TEXTO, depois: 0 }),
-    ],
-  });
+  // 14. Rodapé — só no FIM do documento (última folha), como no modelo manual;
+  //     as demais páginas ficam sem rodapé.
+  filhos.push(
+    new Paragraph({
+      spacing: { before: 360, after: 60 },
+      border: { bottom: { style: BorderStyle.SINGLE, size: 12, color: VERMELHO_MARCA, space: 1 } },
+      children: [],
+    }),
+  );
+  filhos.push(par(p.empresa.endereco, { bold: true, size: 8, align: AlignmentType.CENTER, color: VERMELHO_MARCA, depois: 0 }));
+  filhos.push(
+    new Paragraph({
+      alignment: AlignmentType.CENTER,
+      spacing: { after: 0 },
+      children: [
+        new TextRun({ text: p.empresa.email, size: 16, color: AZUL_LINK, underline: {}, font: FONTE_DOCX }),
+        new TextRun({ text: '          ', size: 16, font: FONTE_DOCX }),
+        new TextRun({ text: p.empresa.site, size: 16, color: AZUL_LINK, underline: {}, font: FONTE_DOCX }),
+      ],
+    }),
+  );
+  filhos.push(par(`CONTATO: ${p.empresa.telefone}`, { bold: true, size: 8, align: AlignmentType.CENTER, depois: 0 }));
 
   const doc = new Document({
     creator: p.empresa.nome,
@@ -761,9 +838,8 @@ export async function gerarDocx(p: PropostaExport): Promise<Buffer> {
     sections: [
       {
         properties: {
-          page: { margin: { top: 720, right: 720, bottom: 900, left: 720 } },
+          page: { margin: { top: 720, right: 720, bottom: 720, left: 720 } },
         },
-        footers: { default: rodape },
         children: filhos,
       },
     ],
@@ -832,19 +908,35 @@ export async function gerarXlsx(p: PropostaExport): Promise<Buffer> {
       buffer: logoDecodificado.buffer as any,
       extension: logoDecodificado.mime === 'image/png' ? 'png' : 'jpeg',
     });
+    // Logotipo à esquerda (coluna A/B) e o bloco vermelho à direita (coluna C),
+    // em 4 linhas — mesmo desenho do papel timbrado.
     const linhaLogo = linha;
-    ws.getRow(linhaLogo).height = Math.max(30, tamanho.height * 0.75);
     ws.addImage(idImagem, {
-      tl: { col: 1, row: linhaLogo - 1 },
+      tl: { col: 0, row: linhaLogo - 1 },
       ext: { width: tamanho.width, height: tamanho.height },
       editAs: 'oneCell',
     } as any);
-    linha++;
   } else {
-    escreverFaixa(p.empresa.nome, { bold: true, size: 20, align: 'center', color: '1F3864', altura: 28 });
+    ws.getCell(linha, 1).value = p.empresa.nome;
+    ws.getCell(linha, 1).font = { name: 'Calibri', bold: true, size: 18, color: { argb: `FF${VERMELHO_MARCA}` } };
   }
-  escreverFaixa(RAZAO_SOCIAL, { size: 10, align: 'center' });
-  escreverFaixa(ESPECIALIDADES, { size: 8, align: 'center', color: CINZA_TEXTO, altura: 16 });
+  const blocoMarca: [string, boolean, number][] = [
+    [MARCA_NOME, true, 11],
+    [RAZAO_SOCIAL, true, 9.5],
+    [ESPECIALIDADES_1, false, 8.5],
+    [ESPECIALIDADES_2, false, 8.5],
+  ];
+  for (const [texto, bold, size] of blocoMarca) {
+    const c = ws.getCell(linha, 3);
+    c.value = texto;
+    c.font = { name: 'Calibri', bold, size, color: { argb: `FF${VERMELHO_MARCA}` } };
+    c.alignment = { horizontal: 'right', vertical: 'middle' };
+    ws.getRow(linha).height = 15;
+    linha++;
+  }
+  for (let col = 1; col <= 3; col++) {
+    ws.getCell(linha - 1, col).border = { bottom: { style: 'medium', color: { argb: `FF${VERMELHO_MARCA}` } } };
+  }
   linha++;
 
   // 2. Cliente.
@@ -970,11 +1062,14 @@ export async function gerarXlsx(p: PropostaExport): Promise<Buffer> {
     escreverFaixa(p.notaImportante, { size: 8, altura: alturaEstimada(p.notaImportante) });
   }
 
-  // 14. Rodapé.
+  // 14. Rodapé — só no fim da planilha, como no modelo manual.
   linha++;
-  escreverFaixa(p.empresa.endereco, { size: 8, align: 'center', color: CINZA_TEXTO });
-  escreverFaixa(`${p.empresa.email}  ·  ${p.empresa.site}`, { size: 8, align: 'center', color: CINZA_TEXTO });
-  escreverFaixa(`PABX: ${p.empresa.telefone}`, { size: 8, align: 'center', color: CINZA_TEXTO });
+  for (let col = 1; col <= 3; col++) {
+    ws.getCell(linha - 1, col).border = { bottom: { style: 'medium', color: { argb: `FF${VERMELHO_MARCA}` } } };
+  }
+  escreverFaixa(p.empresa.endereco, { bold: true, size: 8, align: 'center', color: VERMELHO_MARCA });
+  escreverFaixa(`${p.empresa.email}          ${p.empresa.site}`, { size: 8, align: 'center', color: AZUL_LINK });
+  escreverFaixa(`CONTATO: ${p.empresa.telefone}`, { bold: true, size: 8, align: 'center' });
 
   // Painel congelado no cabeçalho da tabela de itens.
   ws.views = [{ state: 'frozen', xSplit: 0, ySplit: linhaCabecalho, topLeftCell: `A${linhaCabecalho + 1}`, activeCell: 'A1' }];

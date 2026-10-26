@@ -827,6 +827,22 @@ export default async function proposalRoutes(app: FastifyInstance) {
     if (!p) throw notFound('Proposta não encontrada.');
     const empresa = await prisma.company.findUnique({ where: { id: companyId } });
 
+    // O e-mail de contato impresso na proposta é o da LOJA. No cadastro, a
+    // empresa nasce com o e-mail de quem a criou (login do dono) — e foi esse
+    // e-mail pessoal que apareceu no rodapé (pedido da Driele, 16/10). Se o
+    // e-mail da empresa for o login de alguém da equipe, usa o e-mail
+    // institucional padrão. Para outro endereço, basta cadastrar em
+    // Integrações → Dados da empresa.
+    const EMAIL_LOJA = 'jundaquece@jundaquece.com.br';
+    let emailContato = empresa?.email?.trim() || EMAIL_LOJA;
+    if (emailContato !== EMAIL_LOJA) {
+      const ehLoginDeUsuario = await prisma.user.findFirst({
+        where: { companyId, email: { equals: emailContato, mode: 'insensitive' } },
+        select: { id: true },
+      });
+      if (ehLoginDeUsuario) emailContato = EMAIL_LOJA;
+    }
+
     const dados: PropostaExport = {
       numero: p.number,
       emissao: p.issueDate,
@@ -853,7 +869,7 @@ export default async function proposalRoutes(app: FastifyInstance) {
       empresa: {
         nome: (empresa?.name ?? 'JUNDIAQUECE').toUpperCase(),
         endereco: 'Av. Pref. Luiz Latorre, 4115 - Jd das Hortências - CEP 13209-430 - Jundiaí - SP',
-        email: empresa?.email ?? 'jundaquece@jundaquece.com.br',
+        email: emailContato,
         site: 'www.jundaquece.com.br',
         telefone: empresa?.phone ?? '(11) 4522-6487',
       },
