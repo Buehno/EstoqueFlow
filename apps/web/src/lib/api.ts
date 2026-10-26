@@ -73,7 +73,15 @@ export interface Product {
   id: string; sku: string; barcode: string | null; name: string; unit: string;
   size?: string | null; measure?: number | null; measureUnit?: string | null;
   costPrice: number; salePrice: number; minStock: number; active: boolean;
+  /** Preço à vista da tabela do fornecedor (nulo = só existe o preço de venda). */
+  cashPrice?: number | null;
+  installmentTerms?: string | null;
+  priceTable?: string | null;
+  supplierCode?: string | null;
+  /** Vendido sob encomenda: entra na proposta sem exigir saldo. */
+  onDemand?: boolean;
   category?: { id: string; name: string } | null;
+  supplier?: { id: string; name: string } | null;
   totalStock?: number;
   stockByWarehouse?: { warehouseId: string; warehouse: string; code: string; quantity: number }[];
 }

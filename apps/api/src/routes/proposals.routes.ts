@@ -29,6 +29,8 @@ const itemSchema = z.object({
   total: z.coerce.number().min(0).optional(),
   productId: z.string().uuid().optional().nullable(),
   imageUrl: imageUrlSchema,
+  /** Qual preço da tabela foi usado neste item: parcelado ou à vista (escolhido na hora). */
+  priceMode: z.enum(['PARCELADO', 'A_VISTA']).optional().nullable(),
 });
 
 const corpoSchema = {
@@ -81,6 +83,8 @@ async function conferirEstoque(
       problemas.push({ description: item.description, solicitado: item.quantity, disponivel: 0, produto: '(produto removido)' });
       continue;
     }
+    // Sob encomenda (tabela de fornecedor): não exige saldo — é pedido ao fabricante.
+    if (produto.onDemand) continue;
     const saldo = await saldoDoProduto(item.productId);
     if (saldo < item.quantity) {
       problemas.push({ description: item.description, solicitado: item.quantity, disponivel: saldo, produto: produto.name });
@@ -110,7 +114,7 @@ async function recalcular(proposalId: string) {
 }
 
 const incluirTudo = {
-  items: { orderBy: { position: 'asc' as const }, include: { product: { select: { id: true, name: true, unit: true, sku: true } } } },
+  items: { orderBy: { position: 'asc' as const }, include: { product: { select: { id: true, name: true, unit: true, sku: true, onDemand: true, salePrice: true, cashPrice: true } } } },
   events: { orderBy: { createdAt: 'desc' as const }, take: 50 },
   customer: true,
   user: { select: { id: true, name: true } },
@@ -130,6 +134,9 @@ function serializar(p: any) {
       unitPrice: n(i.unitPrice),
       total: n(i.total),
       stockAtInsert: i.stockAtInsert == null ? null : n(i.stockAtInsert),
+      product: i.product
+        ? { ...i.product, salePrice: n(i.product.salePrice), cashPrice: i.product.cashPrice == null ? null : n(i.product.cashPrice) }
+        : i.product,
     })),
   };
 }
@@ -619,6 +626,7 @@ export default async function proposalRoutes(app: FastifyInstance) {
             productId: i.productId ?? null,
             stockAtInsert: i.productId ? new Prisma.Decimal(saldos.get(i.productId) ?? 0) : null,
             imageUrl: i.imageUrl ?? null,
+            priceMode: i.priceMode ?? null,
           })),
         });
       }
@@ -755,6 +763,7 @@ export default async function proposalRoutes(app: FastifyInstance) {
             create: origem.items.map((i) => ({
               position: i.position, quantity: i.quantity, quantityText: i.quantityText, unit: i.unit,
               description: i.description, unitPrice: i.unitPrice, total: i.total, productId: i.productId,
+              imageUrl: i.imageUrl, priceMode: i.priceMode,
             })),
           },
         },

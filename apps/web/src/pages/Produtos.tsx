@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Package, Plus, Search, Upload } from 'lucide-react';
+import { BookOpen, Package, Plus, Search, Upload } from 'lucide-react';
 import { api, ApiError, type Product } from '../lib/api';
 import { Badge, brl, Card, Empty, Field, Input, Modal, qty, Select, Spinner, Table, useToast } from '../lib/ui';
+import { useAuth } from '../App';
 
 export default function Produtos() {
   const [items, setItems] = useState<Product[]>([]);
@@ -10,7 +11,31 @@ export default function Produtos() {
   const [search, setSearch] = useState('');
   const [modal, setModal] = useState<'novo' | 'lote' | null>(null);
   const [editing, setEditing] = useState<Product | null>(null);
+  const [carregandoTabelas, setCarregandoTabelas] = useState(false);
   const toast = useToast();
+  const { me } = useAuth();
+  const podeCarregarTabelas = me?.user.role === 'OWNER' || me?.user.role === 'ADMIN';
+
+  /**
+   * Carrega/atualiza as tabelas de preço dos fornecedores (SOLIS, SYLLENT,
+   * INOVA, THOLZ e a SODRAMAR 2015/2016, desatualizada) como produtos sob
+   * encomenda, com preço parcelado e à vista. Pode rodar quantas vezes quiser:
+   * atualiza o que já existe e não mexe em estoque.
+   */
+  const carregarTabelasFornecedores = async () => {
+    setCarregandoTabelas(true);
+    try {
+      const r = await api.post<{ criados: number; atualizados: number; total: number; tabelas: string[] }>('/products/seed-tabelas-fornecedores');
+      toast({
+        kind: 'ok',
+        title: `${r.total} produtos das tabelas de fornecedores`,
+        body: `${r.criados} novo(s), ${r.atualizados} atualizado(s) — ${r.tabelas.length} tabela(s).`,
+      });
+      void load(search);
+    } catch (err) {
+      toast({ kind: 'err', title: 'Não foi possível carregar as tabelas', body: err instanceof ApiError ? err.message : undefined });
+    } finally { setCarregandoTabelas(false); }
+  };
 
   const load = async (q = '') => {
     setLoading(true);
@@ -31,11 +56,16 @@ export default function Produtos() {
 
   const salvar = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    const f = Object.fromEntries(new FormData(e.currentTarget)) as Record<string, string>;
+    const fd = new FormData(e.currentTarget);
+    const f: Record<string, unknown> = Object.fromEntries(fd);
+    // Campos opcionais de tabela: vazio vira nulo (não zero); checkbox vira booleano.
+    f.cashPrice = String(fd.get('cashPrice') ?? '').trim() === '' ? null : Number(fd.get('cashPrice'));
+    f.onDemand = fd.get('onDemand') === 'on';
+    for (const k of ['installmentTerms', 'priceTable', 'supplierCode']) if (!String(f[k] ?? '').trim()) f[k] = null;
     try {
       if (editing) await api.patch(`/products/${editing.id}`, f);
       else await api.post('/products', f);
-      toast({ kind: 'ok', title: editing ? 'Produto atualizado' : 'Produto cadastrado', body: f.name });
+      toast({ kind: 'ok', title: editing ? 'Produto atualizado' : 'Produto cadastrado', body: String(f.name ?? '') });
       setModal(null);
       setEditing(null);
       void load(search);
@@ -71,7 +101,12 @@ export default function Produtos() {
           <h1 className="text-[26px] font-bold tracking-tight">Produtos</h1>
           <p className="mt-1 text-[14px] text-muted">Catálogo compartilhado por todos os depósitos.</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          {podeCarregarTabelas && (
+            <button onClick={() => void carregarTabelasFornecedores()} disabled={carregandoTabelas} className="btn-ghost btn-sm gap-2" title="SOLIS, SYLLENT, INOVA, THOLZ (e SODRAMAR 2015/2016, desatualizada): cria ou atualiza os produtos com preço parcelado e à vista">
+              <BookOpen size={15} /> {carregandoTabelas ? 'Carregando…' : 'Carregar tabelas de fornecedores'}
+            </button>
+          )}
           <button onClick={() => setModal('lote')} className="btn-ghost btn-sm gap-2">
             <Upload size={15} /> Importar lista
           </button>
@@ -123,7 +158,15 @@ export default function Produtos() {
                   ))}
                 </div>
               ) },
-              { key: 'v', header: 'Venda', align: 'right', render: (p) => brl(p.salePrice) },
+              { key: 'v', header: 'Venda', align: 'right', render: (p) => (
+                <div>
+                  <span className="tnum">{brl(p.salePrice)}</span>
+                  {p.cashPrice != null && p.cashPrice !== p.salePrice && (
+                    <span className="block text-[11.5px] text-faint tnum">à vista {brl(p.cashPrice)}</span>
+                  )}
+                </div>
+              ) },
+              { key: 'e', header: '', render: (p) => p.onDemand ? <Badge tone="warn">sob encomenda</Badge> : null },
               { key: 'a', header: '', align: 'right', render: (p) => p.active ? null : <Badge tone="warn">inativo</Badge> },
             ]}
           />
@@ -161,7 +204,23 @@ export default function Produtos() {
             </Select>
           </Field>
           <Field label="Custo unitário (R$)"><Input name="costPrice" type="number" step="0.0001" min="0" defaultValue={editing?.costPrice ?? 0} /></Field>
-          <Field label="Preço de venda (R$)"><Input name="salePrice" type="number" step="0.01" min="0" defaultValue={editing?.salePrice ?? 0} /></Field>
+          <Field label="Preço de venda (R$)" hint="Nas tabelas de fornecedor é o preço parcelado"><Input name="salePrice" type="number" step="0.01" min="0" defaultValue={editing?.salePrice ?? 0} /></Field>
+          <Field label="Preço à vista (R$)" hint="Em branco = não tem preço à vista próprio">
+            <Input name="cashPrice" type="number" step="0.01" min="0" defaultValue={editing?.cashPrice ?? ''} placeholder="—" />
+          </Field>
+          <Field label="Condição do parcelado" hint='Ex.: "até 10x sem juros (Master/Visa)"'>
+            <Input name="installmentTerms" defaultValue={editing?.installmentTerms ?? ''} placeholder="—" />
+          </Field>
+          <Field label="Tabela de preço / vigência" hint="De onde veio o preço">
+            <Input name="priceTable" defaultValue={editing?.priceTable ?? ''} placeholder="SOLIS – Coletor solar – Julho/2026" />
+          </Field>
+          <Field label="Código no fornecedor" hint="Modelo / referência do fabricante">
+            <Input name="supplierCode" defaultValue={editing?.supplierCode ?? ''} placeholder="—" />
+          </Field>
+          <label className="flex items-center gap-2 text-[13px] text-ink sm:col-span-2">
+            <input type="checkbox" name="onDemand" defaultChecked={editing?.onDemand ?? false} className="h-4 w-4" />
+            <span><b>Vendido sob encomenda</b> — entra na proposta mesmo sem saldo em estoque (itens de tabela de fornecedor).</span>
+          </label>
           <Field label="Estoque mínimo" hint="Dispara o alerta de reposição">
             <Input name="minStock" type="number" step="0.001" min="0" defaultValue={editing?.minStock ?? 0} />
           </Field>

@@ -250,7 +250,20 @@ model Product {
   measureUnit String?  @map("measure_unit") // m, cm, mm, m², m³, kg, L
 
   costPrice Decimal @default(0) @map("cost_price") @db.Decimal(14, 4)
+  /// Preço de venda principal — nas tabelas de fornecedor é o preço PARCELADO.
   salePrice Decimal @default(0) @map("sale_price") @db.Decimal(14, 4)
+  /// Preço À VISTA, quando o fornecedor diferencia. Nulo = não há preço à vista próprio.
+  cashPrice Decimal? @map("cash_price") @db.Decimal(14, 4)
+  /// Condição do preço parcelado, como está na tabela: "até 10x sem juros (Master/Visa)", "em 3x"…
+  installmentTerms String? @map("installment_terms")
+  /// Tabela de preço de origem + vigência — ex.: "SOLIS – Coletor solar – Julho/2026".
+  priceTable     String?   @map("price_table")
+  priceTableDate DateTime? @map("price_table_date") @db.Date
+  /// Código do produto no catálogo do fornecedor (modelo/referência).
+  supplierCode String? @map("supplier_code")
+  /// Vendido SOB ENCOMENDA: entra na proposta mesmo sem saldo em estoque e a
+  /// proposta não exige saldo dele. É o caso dos itens das tabelas de fornecedor.
+  onDemand Boolean @default(false) @map("on_demand")
 
   minStock Decimal  @default(0) @map("min_stock") @db.Decimal(14, 3)
   maxStock Decimal? @map("max_stock") @db.Decimal(14, 3)
@@ -696,6 +709,8 @@ model ProposalItem {
   stockAtInsert Decimal? @map("stock_at_insert") @db.Decimal(14, 3)
   /// Foto do item (data URI já comprimida no navegador) — sai ao lado da descrição no PDF/Word.
   imageUrl  String? @map("image_url") @db.Text
+  /// Qual preço da tabela do fornecedor entrou neste item (escolhido na hora): PARCELADO ou A_VISTA.
+  priceMode String? @map("price_mode")
 
   proposal Proposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
   product  Product? @relation(fields: [productId], references: [id], onDelete: SetNull)

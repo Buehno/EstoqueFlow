@@ -17,6 +17,12 @@ export interface ProdutoBusca {
   category: string | null;
   costPrice: number;
   salePrice: number;
+  cashPrice?: number | null;
+  installmentTerms?: string | null;
+  priceTable?: string | null;
+  supplierCode?: string | null;
+  supplier?: string | null;
+  onDemand?: boolean;
   minStock: number;
   exato: boolean;
   totalStock: number;

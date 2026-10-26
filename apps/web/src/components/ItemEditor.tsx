@@ -16,7 +16,16 @@ export interface ItemProposta {
   produtoNome?: string | null;
   saldo?: number | null;
   imageUrl?: string | null;
+  /** Vendido sob encomenda (tabela de fornecedor): não depende de saldo. */
+  onDemand?: boolean | null;
+  /** Os dois preços da tabela, quando o produto tem à vista próprio — permite trocar depois. */
+  precos?: { parcelado: number; aVista: number; condicao?: string | null } | null;
+  /** Qual preço entrou neste item. */
+  priceMode?: 'PARCELADO' | 'A_VISTA' | null;
 }
+
+const temDoisPrecos = (p: { salePrice: number; cashPrice?: number | null }) =>
+  p.cashPrice != null && p.cashPrice > 0 && Math.abs(p.cashPrice - p.salePrice) >= 0.01;
 
 /** Reconhece "/peça ", "/peca ", "/item " ou "/produto " sendo digitado. */
 const GATILHO = /(^|\s)\/(peç|pec|item|produto)a?\s*([^\n/]*)$/i;
@@ -48,6 +57,9 @@ export default function ItemEditor({
   // do comando. O botão de lupa abre a mesma busca/lista de sugestões sem
   // exigir nenhuma sintaxe especial.
   const [buscaManualAberta, setBuscaManualAberta] = useState(false);
+  // Produto de tabela com preço parcelado E à vista: a escolha é feita na hora,
+  // pedido de 26/10. Enquanto não escolher, o total fica em aberto.
+  const [escolhaPreco, setEscolhaPreco] = useState<ProdutoBusca | null>(null);
   const [enviandoFoto, setEnviandoFoto] = useState(false);
   const areaRef = useRef<HTMLTextAreaElement>(null);
   const fotoInputRef = useRef<HTMLInputElement>(null);
@@ -101,18 +113,27 @@ export default function ItemEditor({
     const depois = texto.slice(caret);
     const m = antes.match(GATILHO);
 
-    const rotulo = [p.name, p.size, p.medidaFormatada].filter(Boolean).join(' · ');
+    // Tamanho/medida só entram se o nome ainda não os traz (itens de tabela já vêm completos).
+    const nomeNorm = p.name.toLowerCase();
+    const extras = [p.size, p.medidaFormatada].filter((x): x is string => !!x && !nomeNorm.includes(x.toLowerCase()));
+    const rotulo = [p.name, ...extras].join(' · ');
     const novoAntes = m ? antes.slice(0, antes.length - m[0].length) + (m[1] ?? '') + rotulo : `${antes}${rotulo}`;
 
+    const doisPrecos = temDoisPrecos(p);
     onChange({
       ...item,
       description: novoAntes + depois,
       productId: p.id,
       produtoNome: p.name,
       saldo: p.totalStock,
-      unitPrice: item.unitPrice || p.salePrice,
-      total: item.total || p.salePrice * (item.quantity || 1),
+      onDemand: p.onDemand ?? false,
+      precos: doisPrecos ? { parcelado: p.salePrice, aVista: p.cashPrice!, condicao: p.installmentTerms } : null,
+      priceMode: doisPrecos ? null : (item.priceMode ?? null),
+      // Com dois preços, o valor só entra depois da escolha (abaixo).
+      unitPrice: doisPrecos ? 0 : (item.unitPrice || p.salePrice),
+      total: doisPrecos ? 0 : (item.total || p.salePrice * (item.quantity || 1)),
     });
+    setEscolhaPreco(doisPrecos ? p : null);
     setTermo(null);
     setSugestoes([]);
     setBuscaManualAberta(false);
@@ -131,7 +152,16 @@ export default function ItemEditor({
     else if (e.key === 'Escape') { setTermo(null); setSugestoes([]); setBuscaManualAberta(false); }
   }
 
-  const semSaldo = item.productId != null && (item.saldo ?? 0) < item.quantity;
+  function aplicarPreco(modo: 'PARCELADO' | 'A_VISTA', precos = item.precos) {
+    if (!precos) return;
+    const unitPrice = modo === 'PARCELADO' ? precos.parcelado : precos.aVista;
+    onChange({ ...item, priceMode: modo, unitPrice, total: unitPrice * (item.quantity || 1) });
+    setEscolhaPreco(null);
+    requestAnimationFrame(() => areaRef.current?.focus());
+  }
+
+  const semSaldo = item.productId != null && !item.onDemand && (item.saldo ?? 0) < item.quantity;
+  const aguardandoPreco = escolhaPreco != null || (item.productId != null && item.precos != null && !item.priceMode);
 
   return (
     <div className={cx(
@@ -265,7 +295,7 @@ export default function ItemEditor({
           {sugestoes.length > 0 && (
             <div className="absolute z-40 mt-1 max-h-72 w-full overflow-auto rounded-xl border border-line bg-raised p-1 shadow-pop">
               <p className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-faint">
-                Estoque disponível · ↑↓ para escolher, Enter para inserir
+                Estoque disponível e itens sob encomenda · ↑↓ para escolher, Enter para inserir
               </p>
               <ul role="listbox">
                 {sugestoes.map((p, i) => (
@@ -286,13 +316,33 @@ export default function ItemEditor({
                         </span>
                       </span>
                       <span className="shrink-0 text-right">
-                        <span className="block text-[13px] font-semibold tnum text-ok">{qty(p.totalStock)}</span>
+                        {p.onDemand && p.totalStock <= 0
+                          ? <span className="block text-[11px] font-semibold text-warn">encomenda</span>
+                          : <span className="block text-[13px] font-semibold tnum text-ok">{qty(p.totalStock)}</span>}
                         {p.salePrice > 0 && <span className="block text-[11px] text-faint tnum">{brl(p.salePrice)}</span>}
+                        {temDoisPrecos(p) && <span className="block text-[11px] text-faint tnum">à vista {brl(p.cashPrice!)}</span>}
                       </span>
                     </button>
                   </li>
                 ))}
               </ul>
+            </div>
+          )}
+
+          {aguardandoPreco && item.precos && !somenteLeitura && (
+            <div className="mt-2 rounded-xl border border-brand/40 bg-brand/5 p-3" role="group" aria-label="Escolha o preço deste item">
+              <p className="mb-2 text-[12px] font-medium text-ink">
+                Qual preço vai nesta linha?
+                {item.precos.condicao && <span className="ml-1 font-normal text-faint">({item.precos.condicao})</span>}
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <button type="button" autoFocus onClick={() => aplicarPreco('PARCELADO')} className="btn-primary btn-sm gap-2">
+                  Parcelado · {brl(item.precos.parcelado)}
+                </button>
+                <button type="button" onClick={() => aplicarPreco('A_VISTA')} className="btn-ghost btn-sm gap-2">
+                  À vista · {brl(item.precos.aVista)}
+                </button>
+              </div>
             </div>
           )}
 
@@ -302,11 +352,28 @@ export default function ItemEditor({
                 {semSaldo ? <TriangleAlert size={11} /> : <Link2 size={11} />}
                 {item.produtoNome ?? 'item do estoque'}
               </span>
-              <span className="text-faint">saldo {qty(item.saldo ?? 0)}</span>
+              {item.onDemand ? (
+                <span className="chip bg-warn/15 text-warn" title="Item de tabela de fornecedor: pedido ao fabricante, não depende do estoque">sob encomenda</span>
+              ) : (
+                <span className="text-faint">saldo {qty(item.saldo ?? 0)}</span>
+              )}
+              {item.precos && item.priceMode && !somenteLeitura && (
+                <span className="inline-flex overflow-hidden rounded-md border border-line text-[11px]" role="group" aria-label="Preço usado neste item">
+                  <button type="button" onClick={() => aplicarPreco('PARCELADO')} className={cx('px-2 py-0.5', item.priceMode === 'PARCELADO' ? 'bg-brand/12 font-semibold text-brand' : 'text-faint hover:text-ink')}>
+                    parcelado {brl(item.precos.parcelado)}
+                  </button>
+                  <button type="button" onClick={() => aplicarPreco('A_VISTA')} className={cx('px-2 py-0.5', item.priceMode === 'A_VISTA' ? 'bg-brand/12 font-semibold text-brand' : 'text-faint hover:text-ink')}>
+                    à vista {brl(item.precos.aVista)}
+                  </button>
+                </span>
+              )}
+              {item.precos && item.priceMode && somenteLeitura && (
+                <span className="text-faint">{item.priceMode === 'A_VISTA' ? 'preço à vista' : 'preço parcelado'}</span>
+              )}
               {!somenteLeitura && (
                 <button
                   type="button"
-                  onClick={() => onChange({ ...item, productId: null, produtoNome: null, saldo: null })}
+                  onClick={() => onChange({ ...item, productId: null, produtoNome: null, saldo: null, onDemand: null, precos: null, priceMode: null })}
                   className="text-faint underline-offset-2 hover:text-ink hover:underline"
                 >
                   desvincular

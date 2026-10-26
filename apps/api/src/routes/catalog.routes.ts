@@ -4,6 +4,7 @@ import { prisma } from '../lib/prisma.js';
 import { authenticate, requireRole, CAN_MANAGE, CAN_WRITE_STOCK } from '../lib/auth.js';
 import { conflict, notFound } from '../lib/errors.js';
 import { enqueueProduct } from '../services/sync.service.js';
+import { TABELAS_FORNECEDORES } from '../assets/tabelas-fornecedores.js';
 
 /**
  * O estoque desta operação não tem etiqueta nem código impresso: o produto é
@@ -50,6 +51,17 @@ function filtroBusca(termo?: string) {
     })),
   };
 }
+
+/** Campos de preço de tabela (fornecedor) aceitos no cadastro de produto. */
+const camposPrecoTabela = {
+  /** Preço à vista próprio; vazio/nulo = não tem (vale só o preço de venda). */
+  cashPrice: z.coerce.number().min(0).nullable().optional(),
+  installmentTerms: z.string().max(120).nullable().optional(),
+  priceTable: z.string().max(160).nullable().optional(),
+  supplierCode: z.string().max(80).nullable().optional(),
+  /** Venda sob encomenda: entra na proposta sem exigir saldo. */
+  onDemand: z.boolean().optional(),
+};
 
 /** Campos de medida aceitos no cadastro de produto. */
 const camposMedida = {
@@ -222,6 +234,8 @@ export default async function catalogRoutes(app: FastifyInstance) {
         ...p,
         costPrice: Number(p.costPrice),
         salePrice: Number(p.salePrice),
+        cashPrice: p.cashPrice == null ? null : Number(p.cashPrice),
+        measure: p.measure == null ? null : Number(p.measure),
         minStock: Number(p.minStock),
         maxStock: p.maxStock == null ? null : Number(p.maxStock),
         totalStock: p.stockItems.reduce((a, s) => a + Number(s.quantity), 0),
@@ -233,6 +247,72 @@ export default async function catalogRoutes(app: FastifyInstance) {
         })),
       })),
     };
+  });
+
+  /**
+   * Carrega as tabelas de preço dos fornecedores (SOLIS, SYLLENT, INOVA, THOLZ
+   * e a SODRAMAR 2015/2016 marcada como desatualizada) como produtos do
+   * catálogo, com preço parcelado e à vista, vendidos SOB ENCOMENDA (entram na
+   * proposta mesmo sem saldo). Idempotente pelo SKU: rodar de novo atualiza
+   * preços/descrições e não duplica; estoque e saldo nunca são tocados.
+   */
+  app.post('/products/seed-tabelas-fornecedores', { preHandler: requireRole(...CAN_MANAGE) }, async (req) => {
+    const companyId = req.user!.companyId;
+
+    const categorias = new Map<string, string>();
+    for (const nome of new Set(TABELAS_FORNECEDORES.map((t) => t.categoria))) {
+      const c = await prisma.category.upsert({
+        where: { companyId_name: { companyId, name: nome } },
+        update: {},
+        create: { companyId, name: nome },
+      });
+      categorias.set(nome, c.id);
+    }
+    const fornecedores = new Map<string, string>();
+    for (const nome of new Set(TABELAS_FORNECEDORES.map((t) => t.fornecedor))) {
+      const f = await prisma.supplier.upsert({
+        where: { companyId_name: { companyId, name: nome } },
+        update: {},
+        create: { companyId, name: nome, notes: 'Cadastrado a partir da tabela de preços do fabricante.' },
+      });
+      fornecedores.set(nome, f.id);
+    }
+
+    let criados = 0, atualizados = 0;
+    const ids: string[] = [];
+    for (const t of TABELAS_FORNECEDORES) {
+      const campos = {
+        name: t.nome,
+        description: t.descricao,
+        unit: t.unidade,
+        size: t.tamanho,
+        salePrice: t.precoParcelado,
+        cashPrice: t.precoAVista,
+        installmentTerms: t.condicaoParcelado,
+        priceTable: t.tabela,
+        priceTableDate: new Date(`${t.vigencia}T00:00:00Z`),
+        supplierCode: t.codigoFornecedor,
+        onDemand: true,
+        categoryId: categorias.get(t.categoria)!,
+        supplierId: fornecedores.get(t.fornecedor)!,
+        active: true,
+      };
+      const existente = await prisma.product.findFirst({ where: { companyId, sku: t.sku } });
+      const searchText = montarSearchText({ ...campos, sku: t.sku, description: `${t.descricao ?? ''} ${t.fornecedor} ${t.codigoFornecedor ?? ''}` });
+      if (existente) {
+        await prisma.product.update({ where: { id: existente.id }, data: { ...campos, searchText } });
+        ids.push(existente.id);
+        atualizados++;
+      } else {
+        const novo = await prisma.product.create({ data: { companyId, sku: t.sku, ...campos, searchText } });
+        ids.push(novo.id);
+        criados++;
+      }
+    }
+    await prisma.$transaction(async (tx) => { for (const id of ids) await enqueueProduct(tx, companyId, id); });
+
+    const tabelas = [...new Set(TABELAS_FORNECEDORES.map((t) => t.tabela))];
+    return { criados, atualizados, total: TABELAS_FORNECEDORES.length, tabelas };
   });
 
   /**
@@ -258,7 +338,7 @@ export default async function catalogRoutes(app: FastifyInstance) {
     const exato = termo
       ? await prisma.product.findFirst({
           where: { companyId, active: true, OR: [{ barcode: termo }, { sku: termo }] },
-          include: { category: true, stockItems: { include: { warehouse: true } } },
+          include: { category: true, supplier: true, stockItems: { include: { warehouse: true } } },
         })
       : null;
 
@@ -269,7 +349,7 @@ export default async function catalogRoutes(app: FastifyInstance) {
         ...(exato ? { id: { not: exato.id } } : {}),
         ...filtroBusca(termo),
       },
-      include: { category: true, stockItems: { include: { warehouse: true } } },
+      include: { category: true, supplier: true, stockItems: { include: { warehouse: true } } },
       orderBy: { name: 'asc' },
       take: q.take,
     });
@@ -301,6 +381,12 @@ export default async function catalogRoutes(app: FastifyInstance) {
         category: p.category?.name ?? null,
         costPrice: Number(p.costPrice),
         salePrice: Number(p.salePrice),
+        cashPrice: p.cashPrice == null ? null : Number(p.cashPrice),
+        installmentTerms: p.installmentTerms,
+        priceTable: p.priceTable,
+        supplierCode: p.supplierCode,
+        supplier: p.supplier?.name ?? null,
+        onDemand: p.onDemand,
         minStock: Number(p.minStock),
         exato: exato ? p.id === exato.id : false,
         totalStock: porDeposito.reduce((a, s) => a + s.quantity, 0),
@@ -314,7 +400,8 @@ export default async function catalogRoutes(app: FastifyInstance) {
     return {
       termo,
       total: mapeado.length,
-      items: q.comSaldo === 'true' ? mapeado.filter((p) => p.totalStock > 0) : mapeado,
+      // Sob encomenda entra mesmo sem saldo: é vendido pela tabela do fornecedor.
+      items: q.comSaldo === 'true' ? mapeado.filter((p) => p.totalStock > 0 || p.onDemand) : mapeado,
     };
   });
 
@@ -353,6 +440,7 @@ export default async function catalogRoutes(app: FastifyInstance) {
         description: z.string().optional(),
         unit: z.string().default('UN'),
         ...camposMedida,
+        ...camposPrecoTabela,
         costPrice: z.coerce.number().min(0).default(0),
         salePrice: z.coerce.number().min(0).default(0),
         minStock: z.coerce.number().min(0).default(0),
@@ -381,6 +469,11 @@ export default async function catalogRoutes(app: FastifyInstance) {
         measureUnit: body.measureUnit || null,
         costPrice: body.costPrice,
         salePrice: body.salePrice,
+        cashPrice: body.cashPrice ?? null,
+        installmentTerms: body.installmentTerms || null,
+        priceTable: body.priceTable || null,
+        supplierCode: body.supplierCode || null,
+        onDemand: body.onDemand ?? false,
         minStock: body.minStock,
         maxStock: body.maxStock,
         categoryId: body.categoryId || null,
@@ -402,6 +495,7 @@ export default async function catalogRoutes(app: FastifyInstance) {
         description: z.string().optional(),
         unit: z.string().optional(),
         ...camposMedida,
+        ...camposPrecoTabela,
         costPrice: z.coerce.number().min(0).optional(),
         salePrice: z.coerce.number().min(0).optional(),
         minStock: z.coerce.number().min(0).optional(),

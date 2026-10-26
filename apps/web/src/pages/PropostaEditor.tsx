@@ -37,6 +37,12 @@ export default function PropostaEditor() {
         produtoNome: i.product?.name ?? null,
         saldo: i.stockAtInsert,
         imageUrl: i.imageUrl ?? null,
+        onDemand: i.product?.onDemand ?? false,
+        precos:
+          i.product && i.product.cashPrice != null && Math.abs(Number(i.product.cashPrice) - Number(i.product.salePrice)) >= 0.01
+            ? { parcelado: Number(i.product.salePrice), aVista: Number(i.product.cashPrice) }
+            : null,
+        priceMode: i.priceMode ?? null,
       })),
     );
     setSujo(false);
@@ -57,7 +63,7 @@ export default function PropostaEditor() {
         items: itens.map((i) => ({
           quantity: i.quantity, quantityText: i.quantityText, description: i.description,
           unitPrice: i.unitPrice, total: i.total, productId: i.productId ?? null,
-          imageUrl: i.imageUrl ?? null,
+          imageUrl: i.imageUrl ?? null, priceMode: i.priceMode ?? null,
         })),
       });
       await api.patch(`/proposals/${id}`, {
