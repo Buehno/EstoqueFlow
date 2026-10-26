@@ -1,9 +1,33 @@
 import { PrismaClient, Prisma } from '@prisma/client';
+import { createRequire } from 'node:module';
 import { isProd } from '../env.js';
 
-export const prisma = new PrismaClient({
-  log: isProd ? ['warn', 'error'] : ['warn', 'error'],
-});
+/**
+ * PRISMA_ADAPTER=pg troca o engine nativo do Prisma pelo engine WASM + driver
+ * `pg`. Serve para rodar a API em ambientes de teste onde os binários nativos
+ * do Prisma não podem ser baixados. Em produção a variável não existe, o
+ * cliente padrão é usado e os módulos abaixo nem chegam a ser carregados.
+ */
+function criarCliente(): PrismaClient {
+  const log: Prisma.LogLevel[] = isProd ? ['warn', 'error'] : ['warn', 'error'];
+  if (process.env.PRISMA_ADAPTER !== 'pg') return new PrismaClient({ log });
+  const req = createRequire(import.meta.url);
+  const { Pool } = req('pg') as typeof import('pg');
+  const { PrismaPg } = req('@prisma/adapter-pg') as typeof import('@prisma/adapter-pg');
+  const wasm = req('@prisma/client/wasm') as typeof import('@prisma/client/wasm');
+  // O runtime WASM traz as próprias classes Decimal/erros; o restante do código
+  // usa as do pacote padrão. Alinha as duas para `new Prisma.Decimal(x)` e os
+  // `instanceof` continuarem válidos com os valores que vêm do banco.
+  const alvo = Prisma as unknown as Record<string, unknown>;
+  const origem = wasm.Prisma as unknown as Record<string, unknown>;
+  for (const k of ['Decimal', 'PrismaClientKnownRequestError', 'PrismaClientValidationError', 'PrismaClientInitializationError', 'PrismaClientUnknownRequestError', 'PrismaClientRustPanicError']) {
+    if (origem[k]) alvo[k] = origem[k];
+  }
+  const adapter = new PrismaPg(new Pool({ connectionString: process.env.DATABASE_URL }));
+  return new wasm.PrismaClient({ log, adapter }) as unknown as PrismaClient;
+}
+
+export const prisma = criarCliente();
 
 export { Prisma };
 

@@ -5,7 +5,10 @@
 // ============================================================================
 
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  // driverAdapters: só é usado quando PRISMA_ADAPTER=pg (testes locais sem os
+  // binários nativos do Prisma). Em produção o cliente segue com o engine nativo.
+  previewFeatures = ["driverAdapters"]
 }
 
 datasource db {

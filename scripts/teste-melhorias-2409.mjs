@@ -25,7 +25,9 @@ function check(nome, cond, extra) {
   else { falhou++; console.log(`FALHOU ${nome}`, extra !== undefined ? JSON.stringify(extra).slice(0, 400) : ''); }
 }
 
-const sql = (q) => execSync(`sudo -u postgres psql -d estoqueflow_full -qtAc ${JSON.stringify(q)}`).toString().trim();
+// PSQL: comando psql do ambiente (padrão: o Postgres local de teste usado nas sessões anteriores).
+const PSQL = process.env.PSQL || 'sudo -u postgres psql -d estoqueflow_full';
+const sql = (q) => execSync(`${PSQL} -qtAc ${JSON.stringify(q)}`).toString().trim();
 
 async function main() {
   const reg = await req('POST', '/auth/register', {
