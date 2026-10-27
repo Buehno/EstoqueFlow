@@ -39,8 +39,8 @@ export default function Dashboard() {
         <Stat
           label="Alerta de compra"
           value={int(d.alertas.alertaCompra)}
-          sub={d.alertas.atencao ? `${d.alertas.atencao} em atenção` : 'nenhum item em atenção'}
-          tone={d.alertas.alertaCompra ? 'danger' : d.alertas.atencao ? 'warn' : 'ok'}
+          sub="total ≤ 50% do estoque aceitável"
+          tone={d.alertas.alertaCompra ? 'danger' : 'ok'}
           icon={<AlertTriangle size={18} />}
         />
         <Stat
@@ -112,17 +112,17 @@ export default function Dashboard() {
       <div className="grid gap-6 xl:grid-cols-2">
         <Card
           title="Reposição"
-          subtitle="Pelo total dos dois depósitos — metade do mínimo dispara a compra"
+          subtitle="Pelo total dos dois depósitos — metade do estoque aceitável dispara a compra"
           action={<Link to="/app/relatorios" className="btn-ghost btn-sm">Ver relatório</Link>}
         >
           <Table
             rows={d.alertas.lista.slice(0, 8)}
             keyOf={(r) => r.productId}
-            empty={<Empty icon={<TrendingUp size={24} />} title="Nenhum item pedindo reposição" body="Todo produto com mínimo definido está acima dele." />}
+            empty={<Empty icon={<TrendingUp size={24} />} title="Nenhum item pedindo reposição" body="Todo produto com estoque aceitável definido está acima da metade dele." />}
             columns={[
               { key: 's', header: '', render: (r) => (
-                <Badge tone={r.situacao === 'ALERTA_COMPRA' ? 'danger' : 'warn'}>
-                  {r.situacao === 'ALERTA_COMPRA' ? 'comprar' : 'atenção'}
+                <Badge tone="danger">
+                  comprar
                 </Badge>
               ) },
               { key: 'p', header: 'Produto', render: (r) => (
@@ -142,7 +142,7 @@ export default function Dashboard() {
           />
           {d.alertas.semMinimo > 0 && (
             <p className="mt-3 text-[12.5px] text-faint">
-              {d.alertas.semMinimo} produto(s) ainda sem estoque mínimo definido — ficam fora do alerta até alguém definir a régua.
+              {d.alertas.semMinimo} produto(s) ainda sem estoque aceitável definido — ficam fora do alerta até alguém definir a régua.
             </p>
           )}
         </Card>

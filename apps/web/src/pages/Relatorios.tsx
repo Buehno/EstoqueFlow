@@ -19,10 +19,10 @@ const ABAS: { k: Aba; label: string; hint: string }[] = [
 ];
 
 const TOM_SITUACAO: Record<string, 'danger' | 'warn' | 'ok' | 'neutral'> = {
-  ALERTA_COMPRA: 'danger', ATENCAO: 'warn', OK: 'ok', SEM_MINIMO: 'neutral',
+  ALERTA_COMPRA: 'danger', OK: 'ok', SEM_MINIMO: 'neutral',
 };
 const ROTULO_SITUACAO: Record<string, string> = {
-  ALERTA_COMPRA: 'comprar', ATENCAO: 'atenção', OK: 'ok', SEM_MINIMO: 'sem mínimo',
+  ALERTA_COMPRA: 'comprar', OK: 'ok', SEM_MINIMO: 'sem aceitável',
 };
 
 export default function Relatorios() {
@@ -34,7 +34,7 @@ export default function Relatorios() {
   const [quebrados, setQuebrados] = useState<SaldoQuebrado[]>([]);
   const [fracionados, setFracionados] = useState<Fracionados | null>(null);
   const [duplicados, setDuplicados] = useState<GrupoDuplicado[]>([]);
-  const [filtroCompra, setFiltroCompra] = useState<'alerta' | 'atencao' | 'semMinimo' | 'todos'>('alerta');
+  const [filtroCompra, setFiltroCompra] = useState<'alerta' | 'semMinimo' | 'todos'>('alerta');
   const [loading, setLoading] = useState(true);
   const [ocupado, setOcupado] = useState(false);
   const toast = useToast();
@@ -69,7 +69,6 @@ export default function Relatorios() {
 
   const listaCompra: LinhaCompra[] =
     filtroCompra === 'alerta' ? compras.alerta
-      : filtroCompra === 'atencao' ? compras.atencao
       : filtroCompra === 'semMinimo' ? compras.semMinimo
       : compras.itens;
 
@@ -138,21 +137,19 @@ export default function Relatorios() {
       {aba === 'compras' && (
         <>
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <Stat label="Alerta de compra" value={int(compras.resumo.alertaCompra)} sub="total ≤ 50% do mínimo" tone={compras.resumo.alertaCompra ? 'danger' : 'ok'} icon={<AlertTriangle size={18} />} />
-            <Stat label="Atenção" value={int(compras.resumo.atencao)} sub="total ≤ mínimo" tone={compras.resumo.atencao ? 'warn' : 'ok'} />
-            <Stat label="Reposição estimada" value={brl(compras.resumo.valorAComprar)} sub="alerta + atenção" />
-            <Stat label="Sem mínimo definido" value={int(compras.resumo.semMinimo)} sub="fora do alerta até definir" />
+            <Stat label="Alerta de compra" value={int(compras.resumo.alertaCompra)} sub="total ≤ 50% do estoque aceitável" tone={compras.resumo.alertaCompra ? 'danger' : 'ok'} icon={<AlertTriangle size={18} />} />
+            <Stat label="Reposição estimada" value={brl(compras.resumo.valorAComprar)} sub="para voltar ao aceitável" />
+            <Stat label="Sem estoque aceitável definido" value={int(compras.resumo.semMinimo)} sub="fora do alerta até definir" />
           </div>
 
           <Card
             title="Como a régua funciona"
             subtitle="O que decide é o total somado dos depósitos, nunca o saldo de um só"
           >
-            <div className="grid gap-3 sm:grid-cols-3">
+            <div className="grid gap-3 sm:grid-cols-2">
               {[
-                { t: 'OK', d: 'Total acima do estoque mínimo.', tone: 'bg-ok/12 text-ok' },
-                { t: 'Atenção', d: 'Total igual ou abaixo do mínimo — programar a compra.', tone: 'bg-warn/12 text-warn' },
-                { t: 'Alerta de compra', d: 'Total igual ou abaixo da metade do mínimo — comprar agora.', tone: 'bg-danger/12 text-danger' },
+                { t: 'OK', d: 'Total acima da metade do estoque aceitável. Chegar perto do aceitável não dispara nada.', tone: 'bg-ok/12 text-ok' },
+                { t: 'Alerta de compra', d: 'Total igual ou abaixo da METADE do estoque aceitável — comprar a quantidade que falta para voltar ao aceitável.', tone: 'bg-danger/12 text-danger' },
               ].map((x) => (
                 <div key={x.t} className="rounded-xl border border-line p-4">
                   <span className={cx('chip', x.tone)}>{x.t}</span>
@@ -168,8 +165,7 @@ export default function Relatorios() {
               <div className="flex flex-wrap gap-1.5">
                 {([
                   ['alerta', `Alerta (${compras.resumo.alertaCompra})`],
-                  ['atencao', `Atenção (${compras.resumo.atencao})`],
-                  ['semMinimo', `Sem mínimo (${compras.resumo.semMinimo})`],
+                  ['semMinimo', `Sem aceitável (${compras.resumo.semMinimo})`],
                   ['todos', `Todos (${compras.resumo.produtos})`],
                 ] as const).map(([k, label]) => (
                   <button

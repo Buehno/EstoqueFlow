@@ -55,9 +55,9 @@ export async function dashboard(companyId: string) {
   });
 
   /**
-   * Alerta pela regra de 24/09: o que decide é o TOTAL somado dos depósitos,
-   * não o saldo de cada um. `minStock` é o teto de conforto (abaixo dele o
-   * item fica em ATENÇÃO) e metade do mínimo é o gatilho de compra.
+   * Alerta: o que decide é o TOTAL somado dos depósitos, não o saldo de cada
+   * um. `minStock` é o estoque ACEITÁVEL e metade dele é o único gatilho de
+   * compra (regra do Ronaldo, 27/10 — sem estado de "atenção").
    * A lista detalhada, com todas as visões, está em `/reports/compras`.
    */
   const porProduto = new Map<string, { sku: string; name: string; unit: string; minStock: number; total: number; porDeposito: { code: string; name: string; quantity: number }[] }>();
@@ -76,7 +76,7 @@ export async function dashboard(companyId: string) {
   }
 
   const classificados = [...porProduto.entries()]
-    .filter(([, p]) => p.minStock > 0 && p.total <= p.minStock)
+    .filter(([, p]) => p.minStock > 0 && p.total <= p.minStock * 0.5)
     .map(([productId, p]) => ({
       productId,
       sku: p.sku,
@@ -85,16 +85,13 @@ export async function dashboard(companyId: string) {
       total: p.total,
       minStock: p.minStock,
       pontoCompra: p.minStock * 0.5,
-      situacao: (p.total <= p.minStock * 0.5 ? 'ALERTA_COMPRA' : 'ATENCAO') as 'ALERTA_COMPRA' | 'ATENCAO',
+      situacao: 'ALERTA_COMPRA' as const,
       falta: Number((p.minStock - p.total).toFixed(3)),
       depositos: p.porDeposito.sort((a, b) => a.code.localeCompare(b.code)),
     }))
-    .sort((a, b) =>
-      (a.situacao === b.situacao ? 0 : a.situacao === 'ALERTA_COMPRA' ? -1 : 1) ||
-      b.falta - a.falta);
+    .sort((a, b) => b.falta - a.falta);
 
-  const alertaCompra = classificados.filter((c) => c.situacao === 'ALERTA_COMPRA');
-  const atencao = classificados.filter((c) => c.situacao === 'ATENCAO');
+  const alertaCompra = classificados;
   const semMinimo = [...porProduto.values()].filter((p) => p.minStock <= 0).length;
   const abaixoMinimo = classificados.slice(0, 25);
 
@@ -107,13 +104,11 @@ export async function dashboard(companyId: string) {
     produtosAtivos,
     depositos: porDeposito,
     alertas: {
-      /** Quantos disparam compra agora (total <= 50% do mínimo). */
+      /** Quantos disparam compra agora (total <= 50% do aceitável). */
       alertaCompra: alertaCompra.length,
-      /** Quantos estão em atenção (total <= mínimo, acima da metade). */
-      atencao: atencao.length,
-      /** Produtos ainda sem estoque mínimo definido — ficam fora do alerta. */
+      /** Produtos ainda sem estoque aceitável definido — ficam fora do alerta. */
       semMinimo,
-      /** Compatibilidade: total de itens que pedem olhada (alerta + atenção). */
+      /** Compatibilidade: mesmo número de alertaCompra (o estado "atenção" não existe mais). */
       abaixoMinimo: classificados.length,
       lista: abaixoMinimo,
     },

@@ -118,7 +118,7 @@ export default function Depositos() {
                 <span>{int(r.skus)} SKUs</span>
                 <span>{int(r.unidades)} unidades</span>
               </div>
-              {r.alertas > 0 && <p className="mt-2.5 text-[13px] font-semibold text-danger">{r.alertas} item(ns) abaixo do mínimo</p>}
+              {r.alertas > 0 && <p className="mt-2.5 text-[13px] font-semibold text-danger">{r.alertas} item(ns) em alerta de compra</p>}
               {!w.active && <div className="mt-2"><Badge tone="warn">inativo</Badge></div>}
             </button>
           );

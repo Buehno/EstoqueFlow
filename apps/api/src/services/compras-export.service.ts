@@ -50,7 +50,7 @@ export async function gerarRelatorioCompras(posicao: Posicao, empresa: string): 
     { header: 'Fornecedor', key: 'fornecedor', width: 20 },
     ...posicao.depositos.map((d) => ({ header: d.code, key: `dep_${d.code}`, width: 9 })),
     { header: 'TOTAL', key: 'total', width: 10 },
-    { header: 'Estoque mínimo', key: 'minStock', width: 13 },
+    { header: 'Estoque aceitável', key: 'minStock', width: 15 },
     { header: 'Dispara em (50%)', key: 'pontoCompra', width: 13 },
     { header: 'COMPRAR', key: 'comprar', width: 11 },
     { header: 'Custo médio', key: 'custoMedio', width: 12 },
@@ -71,7 +71,7 @@ export async function gerarRelatorioCompras(posicao: Posicao, empresa: string): 
   const sub = ws.getCell(2, 1);
   sub.value =
     `${empresa} · ${hoje.toLocaleString('pt-BR')} · ` +
-    'critério: total somado dos depósitos igual ou abaixo de 50% do estoque mínimo';
+    'critério: total somado dos depósitos igual ou abaixo de 50% do estoque aceitável';
   sub.font = { name: 'Calibri', size: 10, color: { argb: 'FF666666' } };
 
   ws.addRow([]);

@@ -47,11 +47,12 @@ async function main() {
   let linha = compras.data.itens.find((i) => i.productId === p1.data.id);
   check('60 + 60 com mínimo 100 fica OK (a regra antiga acusaria falta nos dois)', linha.total === 120 && linha.situacao === 'OK', linha);
 
-  // cai para 70 no total → ATENÇÃO (<= mínimo, acima da metade)
+  // cai para 70 no total → continua OK: chegar perto do aceitável não dispara
+  // nada (regra do Ronaldo, 27/10 — o estado "atenção" foi retirado)
   await req('POST', '/movements/saida', { productId: p1.data.id, warehouseId: A.id, quantity: 50, reason: 'consumo' }, token);
   compras = await req('GET', '/reports/compras', undefined, token);
   linha = compras.data.itens.find((i) => i.productId === p1.data.id);
-  check('total 70 com mínimo 100 → ATENÇÃO', linha.total === 70 && linha.situacao === 'ATENCAO', linha);
+  check('total 70 com aceitável 100 → OK (perto do aceitável não dispara)', linha.total === 70 && linha.situacao === 'OK' && linha.comprarParaRepor === 0, linha);
 
   // cai para 50 = metade do mínimo → ALERTA DE COMPRA (o limite conta)
   await req('POST', '/movements/saida', { productId: p1.data.id, warehouseId: B.id, quantity: 20, reason: 'consumo' }, token);
@@ -69,7 +70,7 @@ async function main() {
     !compras.data.alerta.some((i) => i.productId === p2.data.id), compras.data.resumo);
 
   const painel = await req('GET', '/reports/dashboard', undefined, token);
-  check('painel usa a mesma régua (alertaCompra / atencao / semMinimo)',
+  check('painel usa a mesma régua (alertaCompra / semMinimo)',
     painel.data.alertas.alertaCompra === 1 && typeof painel.data.alertas.semMinimo === 'number', painel.data.alertas);
 
   // ── 2. Quantidade quebrada em item de unidade ───────────────────────────

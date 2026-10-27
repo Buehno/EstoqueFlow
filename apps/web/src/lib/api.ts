@@ -99,7 +99,7 @@ export interface MovementRow {
   to: { id: string; name: string } | null;
   reason: string | null; document: string | null; notes: string | null; user: string; createdAt: string;
 }
-export type SituacaoCompra = 'ALERTA_COMPRA' | 'ATENCAO' | 'OK' | 'SEM_MINIMO';
+export type SituacaoCompra = 'ALERTA_COMPRA' | 'OK' | 'SEM_MINIMO';
 
 /** Linha do relatório de reposição — sempre pelo total somado dos depósitos. */
 export interface LinhaCompra {
@@ -114,10 +114,10 @@ export interface PosicaoCompra {
   depositos: { id: string; code: string; name: string }[];
   itens: LinhaCompra[];
   resumo: {
-    produtos: number; alertaCompra: number; atencao: number; ok: number; semMinimo: number;
+    produtos: number; alertaCompra: number; ok: number; semMinimo: number;
     valorAComprar: number; valorEstoque: number;
   };
-  alerta: LinhaCompra[]; atencao: LinhaCompra[]; semMinimo: LinhaCompra[];
+  alerta: LinhaCompra[]; semMinimo: LinhaCompra[];
 }
 export interface SaldoQuebrado {
   productId: string; sku: string; name: string; unit: string;
@@ -148,11 +148,11 @@ export interface Dashboard {
   valorTotalEstoque: number; unidadesTotais: number; produtosAtivos: number;
   depositos: { id: string; code: string; name: string; skus: number; unidades: number; valor: number; semSaldo: number }[];
   alertas: {
-    alertaCompra: number; atencao: number; semMinimo: number; abaixoMinimo: number;
+    alertaCompra: number; semMinimo: number; abaixoMinimo: number;
     lista: {
       productId: string; sku: string; name: string; unit: string;
       total: number; minStock: number; pontoCompra: number;
-      situacao: 'ALERTA_COMPRA' | 'ATENCAO'; falta: number;
+      situacao: 'ALERTA_COMPRA'; falta: number;
       depositos: { code: string; name: string; quantity: number }[];
     }[];
   };

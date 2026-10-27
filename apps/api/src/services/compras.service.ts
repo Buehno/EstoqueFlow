@@ -1,12 +1,15 @@
 /**
  * compras.service
  *
- * Regra de reposição pedida em 24/09, depois da primeira contagem física:
+ * Regra de reposição (24/09, ajustada em 27/10 pelo Ronaldo):
  *
- *   O estoque mínimo é o teto de conforto, não o gatilho de compra.
- *   - total acima do mínimo ............................ OK
- *   - total igual ou abaixo do mínimo .................. ATENÇÃO
- *   - total igual ou abaixo de 50% do mínimo ........... ALERTA DE COMPRA
+ *   O campo `minStock` NÃO é um mínimo: é o **estoque aceitável** — a
+ *   quantidade que o sistema deve ter daquele item. O único gatilho é:
+ *   - total igual ou abaixo de 50% do aceitável ........ ALERTA DE COMPRA
+ *   - qualquer outro total ............................. OK
+ *   Chegar "perto" do aceitável não dispara nada (o estado "atenção" que
+ *   existia foi retirado a pedido). A sugestão de compra é a quantidade que
+ *   falta para voltar ao aceitável.
  *
  * E o que conta é o **total somado dos dois depósitos**, não o saldo de cada
  * um separado — era esse o defeito da regra antiga (`reports.service`
@@ -78,7 +81,7 @@ export function arredondarSaldo(atual: number): number {
   return Math.max(1, Math.round(atual));
 }
 
-export type SituacaoCompra = 'ALERTA_COMPRA' | 'ATENCAO' | 'OK' | 'SEM_MINIMO';
+export type SituacaoCompra = 'ALERTA_COMPRA' | 'OK' | 'SEM_MINIMO';
 
 export interface LinhaCompra {
   productId: string;
@@ -92,11 +95,12 @@ export interface LinhaCompra {
   depositos: { id: string; code: string; name: string; quantity: number }[];
   /** A soma dos depósitos — é este número que decide a compra. */
   total: number;
+  /** Estoque ACEITÁVEL (nome histórico do campo: minStock). */
   minStock: number;
-  /** 50% do mínimo: abaixo disso dispara o alerta de compra. */
+  /** 50% do aceitável: igual ou abaixo disso dispara o alerta de compra. */
   pontoCompra: number;
   situacao: SituacaoCompra;
-  /** Quanto falta para voltar ao mínimo (0 quando está acima). */
+  /** Quanto falta para voltar ao aceitável — só preenchido quando em alerta. */
   comprarParaRepor: number;
   custoMedio: number;
   valorEstoque: number;
@@ -160,7 +164,6 @@ export async function posicaoCompra(companyId: string) {
     const situacao: SituacaoCompra =
       minStock <= 0 ? 'SEM_MINIMO'
         : total <= pontoCompra ? 'ALERTA_COMPRA'
-        : total <= minStock ? 'ATENCAO'
         : 'OK';
 
     return {
@@ -176,7 +179,7 @@ export async function posicaoCompra(companyId: string) {
       minStock,
       pontoCompra,
       situacao,
-      comprarParaRepor: minStock > 0 && total < minStock ? Number((minStock - total).toFixed(3)) : 0,
+      comprarParaRepor: situacao === 'ALERTA_COMPRA' ? Number((minStock - total).toFixed(3)) : 0,
       custoMedio: Number(custoMedio.toFixed(4)),
       valorEstoque: Number((total * custoMedio).toFixed(2)),
       saidas90,
@@ -186,7 +189,6 @@ export async function posicaoCompra(companyId: string) {
 
   const de = (s: SituacaoCompra) => itens.filter((i) => i.situacao === s);
   const alerta = de('ALERTA_COMPRA');
-  const atencao = de('ATENCAO');
   const semMinimo = de('SEM_MINIMO');
 
   return {
@@ -195,29 +197,26 @@ export async function posicaoCompra(companyId: string) {
     resumo: {
       produtos: itens.length,
       alertaCompra: alerta.length,
-      atencao: atencao.length,
       ok: de('OK').length,
       semMinimo: semMinimo.length,
       valorAComprar: Number(
-        [...alerta, ...atencao].reduce((a, i) => a + i.comprarParaRepor * i.custoMedio, 0).toFixed(2),
+        alerta.reduce((a, i) => a + i.comprarParaRepor * i.custoMedio, 0).toFixed(2),
       ),
       valorEstoque: Number(itens.reduce((a, i) => a + i.valorEstoque, 0).toFixed(2)),
     },
     alerta,
-    atencao,
     semMinimo,
   };
 }
 
 /** Agrupamento por categoria — uma das visões do relatório. */
 export function porCategoria(itens: LinhaCompra[]) {
-  const mapa = new Map<string, { categoria: string; produtos: number; alerta: number; atencao: number; total: number; valor: number; comprar: number }>();
+  const mapa = new Map<string, { categoria: string; produtos: number; alerta: number; total: number; valor: number; comprar: number }>();
   for (const i of itens) {
     const chave = i.categoria ?? '(sem categoria)';
-    const linha = mapa.get(chave) ?? { categoria: chave, produtos: 0, alerta: 0, atencao: 0, total: 0, valor: 0, comprar: 0 };
+    const linha = mapa.get(chave) ?? { categoria: chave, produtos: 0, alerta: 0, total: 0, valor: 0, comprar: 0 };
     linha.produtos += 1;
     if (i.situacao === 'ALERTA_COMPRA') linha.alerta += 1;
-    if (i.situacao === 'ATENCAO') linha.atencao += 1;
     linha.total += i.total;
     linha.valor += i.valorEstoque;
     linha.comprar += i.comprarParaRepor * i.custoMedio;
@@ -232,7 +231,7 @@ export function porCategoria(itens: LinhaCompra[]) {
 export function porFornecedor(itens: LinhaCompra[]) {
   const mapa = new Map<string, { fornecedor: string; itensParaComprar: number; valor: number }>();
   for (const i of itens) {
-    if (i.situacao !== 'ALERTA_COMPRA' && i.situacao !== 'ATENCAO') continue;
+    if (i.situacao !== 'ALERTA_COMPRA') continue;
     const chave = i.fornecedor ?? '(sem fornecedor cadastrado)';
     const linha = mapa.get(chave) ?? { fornecedor: chave, itensParaComprar: 0, valor: 0 };
     linha.itensParaComprar += 1;
