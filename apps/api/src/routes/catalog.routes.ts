@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
-import { authenticate, requireRole, CAN_MANAGE, CAN_WRITE_STOCK } from '../lib/auth.js';
+import { authenticate, requireRole, requireCap, CAN_MANAGE } from '../lib/auth.js';
 import { conflict, notFound } from '../lib/errors.js';
 import { enqueueProduct } from '../services/sync.service.js';
 import { TABELAS_FORNECEDORES } from '../assets/tabelas-fornecedores.js';
@@ -147,7 +147,7 @@ export default async function catalogRoutes(app: FastifyInstance) {
     }),
   );
 
-  app.post('/categories', { preHandler: requireRole(...CAN_WRITE_STOCK) }, async (req) => {
+  app.post('/categories', { preHandler: requireCap('GERENCIAR_CADASTROS') }, async (req) => {
     const body = z.object({ name: z.string().min(1), color: z.string().optional() }).parse(req.body);
     return prisma.category.create({ data: { ...body, companyId: req.user!.companyId } });
   });
@@ -160,7 +160,7 @@ export default async function catalogRoutes(app: FastifyInstance) {
     }),
   );
 
-  app.post('/suppliers', { preHandler: requireRole(...CAN_WRITE_STOCK) }, async (req) => {
+  app.post('/suppliers', { preHandler: requireCap('GERENCIAR_CADASTROS') }, async (req) => {
     const body = z
       .object({
         name: z.string().min(2),
@@ -256,7 +256,7 @@ export default async function catalogRoutes(app: FastifyInstance) {
    * proposta mesmo sem saldo). Idempotente pelo SKU: rodar de novo atualiza
    * preços/descrições e não duplica; estoque e saldo nunca são tocados.
    */
-  app.post('/products/seed-tabelas-fornecedores', { preHandler: requireRole(...CAN_MANAGE) }, async (req) => {
+  app.post('/products/seed-tabelas-fornecedores', { preHandler: requireCap('GERENCIAR_CADASTROS') }, async (req) => {
     const companyId = req.user!.companyId;
 
     const categorias = new Map<string, string>();
@@ -431,7 +431,7 @@ export default async function catalogRoutes(app: FastifyInstance) {
     };
   });
 
-  app.post('/products', { preHandler: requireRole(...CAN_WRITE_STOCK) }, async (req) => {
+  app.post('/products', { preHandler: requireCap('GERENCIAR_CADASTROS') }, async (req) => {
     const body = z
       .object({
         sku: z.string().optional().or(z.literal('')),
@@ -485,7 +485,7 @@ export default async function catalogRoutes(app: FastifyInstance) {
     return product;
   });
 
-  app.patch('/products/:id', { preHandler: requireRole(...CAN_WRITE_STOCK) }, async (req) => {
+  app.patch('/products/:id', { preHandler: requireCap('GERENCIAR_CADASTROS') }, async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const body = z
       .object({
@@ -527,7 +527,7 @@ export default async function catalogRoutes(app: FastifyInstance) {
   });
 
   /** Importação em lote (CSV colado no front). */
-  app.post('/products/bulk', { preHandler: requireRole(...CAN_WRITE_STOCK) }, async (req) => {
+  app.post('/products/bulk', { preHandler: requireCap('GERENCIAR_CADASTROS') }, async (req) => {
     const body = z
       .object({
         items: z

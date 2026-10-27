@@ -30,7 +30,7 @@ export default function Integracoes() {
   const logoInputRef = useRef<HTMLInputElement>(null);
   const toast = useToast();
   const { me } = useAuth();
-  const podeEditarEmpresa = me?.user.role === 'OWNER' || me?.user.role === 'ADMIN';
+  const podeEditarEmpresa = me?.user.role === 'OWNER' || me?.user.role === 'GESTOR' || me?.user.role === 'ADMIN';
 
   const load = () => api.get<SyncStatus>('/sync/status').then(setS);
   const carregarEmpresa = () => api.get<DadosEmpresa>('/auth/company').then(setEmpresa);

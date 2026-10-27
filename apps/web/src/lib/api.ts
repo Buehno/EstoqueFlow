@@ -61,8 +61,17 @@ export const api = {
 };
 
 // ─────────────────────────── tipos ───────────────────────────
+export type Capacidade =
+  | 'MOVIMENTAR_ESTOQUE' | 'VENDER_BALCAO' | 'GERENCIAR_PROPOSTAS' | 'GERENCIAR_CADASTROS' | 'GERENCIAR_INVENTARIO'
+  | 'VER_RELATORIO_RESUMIDO' | 'VER_RELATORIO_COMPLETO' | 'VER_ALERTAS' | 'GERENCIAR_REGRAS_ALERTA' | 'GERENCIAR_EQUIPE';
+
 export interface Me {
-  user: { id: string; name: string; email: string; role: string; tutorialDone: boolean; tutorialStep: number; mustChangePassword?: boolean };
+  user: {
+    id: string; name: string; email: string; role: string; roleLabel?: string;
+    /** Capacidades efetivas (papel + liga/desliga por pessoa). */
+    caps?: Capacidade[];
+    tutorialDone: boolean; tutorialStep: number; mustChangePassword?: boolean;
+  };
   company: { id: string; name: string; slug: string; sheetSyncOn?: boolean; sheetLastSync?: string | null };
 }
 export interface Warehouse {

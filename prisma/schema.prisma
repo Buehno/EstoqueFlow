@@ -20,10 +20,13 @@ datasource db {
 
 enum Role {
   OWNER // dono da conta — acesso total, billing
-  ADMIN // gestor de logística
-  ESTOQUISTA // opera entrada / saída / transferência / contagem
-  VENDEDOR // apenas PDV (venda balcão)
-  LEITURA // somente consulta e relatórios
+  GESTOR // gestora: acesso completo (27/10)
+  ADMINISTRADOR // administradora: dia a dia + relatórios resumidos + permissões dos operadores (27/10)
+  OPERADOR // operadora: só o operacional (27/10)
+  ADMIN // papel antigo — vale como GESTOR
+  ESTOQUISTA // papel antigo — operacional + cadastros + inventário
+  VENDEDOR // papel antigo — balcão e propostas
+  LEITURA // somente consulta do painel resumido
 }
 
 enum MovementType {
@@ -131,6 +134,10 @@ model User {
   // acesso. Quem se registra sozinho (dono da empresa) já escolhe a própria
   // senha, então nasce com false.
   mustChangePassword Boolean @default(false) @map("must_change_password")
+
+  /// Permissões ligadas/desligadas por pessoa, por cima do padrão do papel:
+  /// { "VER_ALERTAS": true, "VENDER_BALCAO": false }. Ver lib/permissoes.ts.
+  permissionOverrides Json? @map("permission_overrides")
 
   active    Boolean  @default(true)
   createdAt DateTime @default(now()) @map("created_at")

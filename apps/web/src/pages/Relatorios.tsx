@@ -38,8 +38,8 @@ export default function Relatorios() {
   const [loading, setLoading] = useState(true);
   const [ocupado, setOcupado] = useState(false);
   const toast = useToast();
-  const { me } = useAuth();
-  const podeCorrigir = me?.user.role === 'OWNER' || me?.user.role === 'ADMIN';
+  const { pode } = useAuth();
+  const podeCorrigir = pode('GERENCIAR_REGRAS_ALERTA');
 
   const carregar = async () => {
     const [s, a, g, c, q, d, f] = await Promise.all([

@@ -16,8 +16,8 @@ export default function Movimentacoes() {
   const [f, setF] = useState({ type: '', warehouseId: '', from: '', to: '', search: '' });
   const [editando, setEditando] = useState<MovementRow | null>(null);
   const toast = useToast();
-  const { me } = useAuth();
-  const podeEstornar = me?.user.role === 'OWNER' || me?.user.role === 'ADMIN';
+  const { pode } = useAuth();
+  const podeEstornar = pode('GERENCIAR_REGRAS_ALERTA');
   const podeEditar = podeEstornar;
 
   const load = async () => {

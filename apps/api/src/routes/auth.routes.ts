@@ -6,10 +6,22 @@ import {
   checkPassword,
   hashPassword,
   requireRole,
+  requireCap,
   signToken,
   CAN_MANAGE,
   type Role,
 } from '../lib/auth.js';
+import {
+  CAPACIDADES,
+  PAPEIS_ATRIBUIVEIS,
+  ROTULO_CAPACIDADE,
+  ROTULO_PAPEL,
+  capacidadesEfetivas,
+  detalharPermissoes,
+  nivelDoPapel,
+  normalizarOverrides,
+  type Capacidade,
+} from '../lib/permissoes.js';
 import { Prisma } from '@prisma/client';
 import { badRequest, conflict, notFound, unauthorized } from '../lib/errors.js';
 
@@ -119,6 +131,9 @@ export default async function authRoutes(app: FastifyInstance) {
         name: user.name,
         email: user.email,
         role: user.role,
+        roleLabel: ROTULO_PAPEL[user.role as Role]?.label ?? user.role,
+        /** Capacidades efetivas — o menu e as telas se escondem/mostram por aqui. */
+        caps: [...capacidadesEfetivas(user.role as Role, user.permissionOverrides)],
         tutorialDone: user.tutorialDone,
         tutorialStep: user.tutorialStep,
         mustChangePassword: user.mustChangePassword,
@@ -142,6 +157,9 @@ export default async function authRoutes(app: FastifyInstance) {
         name: user.name,
         email: user.email,
         role: user.role,
+        roleLabel: ROTULO_PAPEL[user.role as Role]?.label ?? user.role,
+        /** Capacidades efetivas — o menu e as telas se escondem/mostram por aqui. */
+        caps: [...capacidadesEfetivas(user.role as Role, user.permissionOverrides)],
         tutorialDone: user.tutorialDone,
         tutorialStep: user.tutorialStep,
         mustChangePassword: user.mustChangePassword,
@@ -240,23 +258,69 @@ export default async function authRoutes(app: FastifyInstance) {
   });
 
   // ── Gestão de usuários da empresa ───────────────────────────────────────
-  app.get('/users', { preHandler: [authenticate, requireRole(...CAN_MANAGE)] }, async (req) =>
-    prisma.user.findMany({
+  /**
+   * Quem pode mexer em quem: só em pessoas de nível ABAIXO do seu (Gestor
+   * mexe em Administrador e Operador; Administrador mexe em Operador). E
+   * ninguém liga para outra pessoa uma capacidade que não tem.
+   */
+  function conferirAlcance(req: { user?: { role: Role; caps?: Set<Capacidade> } }, alvoRole: Role, overrides?: unknown) {
+    const meu = req.user!.role;
+    if (meu !== 'OWNER' && nivelDoPapel(alvoRole) >= nivelDoPapel(meu)) {
+      throw conflict(`Você só pode gerenciar pessoas com papel abaixo do seu (${ROTULO_PAPEL[meu].label}).`);
+    }
+    if (overrides && meu !== 'OWNER') {
+      for (const [cap, ligado] of Object.entries(normalizarOverrides(overrides)) as [Capacidade, boolean][]) {
+        if (ligado && !req.user!.caps?.has(cap)) {
+          throw conflict(`Você não pode ligar "${ROTULO_CAPACIDADE[cap].titulo}" para outra pessoa: você mesmo não tem essa permissão.`);
+        }
+      }
+    }
+  }
+
+  const selecaoUsuario = {
+    id: true, name: true, email: true, role: true, active: true, lastLoginAt: true,
+    mustChangePassword: true, permissionOverrides: true,
+  } as const;
+  const comPermissoes = <T extends { role: Role | string; permissionOverrides: unknown }>(u: T) => ({
+    ...u,
+    roleLabel: ROTULO_PAPEL[u.role as Role]?.label ?? u.role,
+    permissoes: detalharPermissoes(u.role as Role, u.permissionOverrides),
+  });
+
+  /** Catálogo para a tela: papéis atribuíveis e capacidades com rótulo. */
+  app.get('/users/catalogo', { preHandler: [authenticate, requireCap('GERENCIAR_EQUIPE')] }, async (req) => {
+    const meuNivel = nivelDoPapel(req.user!.role);
+    return {
+      papeis: PAPEIS_ATRIBUIVEIS
+        .filter((r) => req.user!.role === 'OWNER' || nivelDoPapel(r) < meuNivel)
+        .map((r) => ({ role: r, ...ROTULO_PAPEL[r] })),
+      capacidades: CAPACIDADES.map((c) => ({ cap: c, ...ROTULO_CAPACIDADE[c] })),
+      minhasCaps: [...(req.user!.caps ?? [])],
+    };
+  });
+
+  app.get('/users', { preHandler: [authenticate, requireCap('GERENCIAR_EQUIPE')] }, async (req) =>
+    (await prisma.user.findMany({
       where: { companyId: req.user!.companyId },
-      select: { id: true, name: true, email: true, role: true, active: true, lastLoginAt: true, mustChangePassword: true },
+      select: selecaoUsuario,
       orderBy: { name: 'asc' },
-    }),
+    })).map(comPermissoes),
   );
 
-  app.post('/users', { preHandler: [authenticate, requireRole(...CAN_MANAGE)] }, async (req) => {
+  const papelSchema = z.enum(['GESTOR', 'ADMINISTRADOR', 'OPERADOR', 'LEITURA', 'ADMIN', 'ESTOQUISTA', 'VENDEDOR']);
+  const overridesSchema = z.record(z.string(), z.boolean()).optional().nullable();
+
+  app.post('/users', { preHandler: [authenticate, requireCap('GERENCIAR_EQUIPE')] }, async (req) => {
     const body = z
       .object({
         name: z.string().min(2),
         email: z.string().email(),
         password: z.string().min(8),
-        role: z.enum(['ADMIN', 'ESTOQUISTA', 'VENDEDOR', 'LEITURA']),
+        role: papelSchema,
+        permissionOverrides: overridesSchema,
       })
       .parse(req.body);
+    conferirAlcance(req, body.role, body.permissionOverrides);
 
     const dup = await prisma.user.findFirst({
       where: { companyId: req.user!.companyId, email: body.email },
@@ -269,31 +333,43 @@ export default async function authRoutes(app: FastifyInstance) {
         name: body.name,
         email: body.email,
         role: body.role,
+        permissionOverrides:
+          body.permissionOverrides && Object.keys(normalizarOverrides(body.permissionOverrides)).length
+            ? normalizarOverrides(body.permissionOverrides)
+            : Prisma.DbNull,
         passwordHash: await hashPassword(body.password),
         // quem cria escolhe a senha inicial — força a pessoa a trocar por
         // uma que só ela conhece no primeiro acesso (falha corrigida em 18/09).
         mustChangePassword: true,
       },
-      select: { id: true, name: true, email: true, role: true, active: true, mustChangePassword: true },
+      select: selecaoUsuario,
     });
-    return user;
+    return comPermissoes(user);
   });
 
-  app.patch('/users/:id', { preHandler: [authenticate, requireRole(...CAN_MANAGE)] }, async (req) => {
+  app.patch('/users/:id', { preHandler: [authenticate, requireCap('GERENCIAR_EQUIPE')] }, async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const body = z
       .object({
         name: z.string().min(2).optional(),
         email: z.string().email().optional(),
-        role: z.enum(['ADMIN', 'ESTOQUISTA', 'VENDEDOR', 'LEITURA']).optional(),
+        role: papelSchema.optional(),
         active: z.boolean().optional(),
         password: z.string().min(8).optional(),
+        /** Mapa completo de liga/desliga; `{}` ou null volta ao padrão do papel. */
+        permissionOverrides: overridesSchema,
       })
       .parse(req.body);
 
     const alvo = await prisma.user.findFirst({ where: { id, companyId: req.user!.companyId } });
     if (!alvo) throw notFound('Pessoa não encontrada.');
     if (alvo.role === 'OWNER') throw conflict('O proprietário não pode ser editado por aqui.');
+    if (alvo.id === req.user!.id && (body.role || body.permissionOverrides !== undefined || body.active === false)) {
+      throw conflict('Você não pode mudar o próprio papel, as próprias permissões nem se desativar.');
+    }
+    conferirAlcance(req, alvo.role as Role);
+    if (body.role) conferirAlcance(req, body.role, body.permissionOverrides);
+    else if (body.permissionOverrides) conferirAlcance(req, alvo.role as Role, body.permissionOverrides);
 
     if (body.email) {
       const dup = await prisma.user.findFirst({
@@ -302,19 +378,28 @@ export default async function authRoutes(app: FastifyInstance) {
       if (dup) throw conflict('Já existe um usuário com este e-mail na empresa.');
     }
 
-    return prisma.user.update({
+    const user = await prisma.user.update({
       where: { id },
       data: {
         ...(body.name ? { name: body.name } : {}),
         ...(body.email ? { email: body.email } : {}),
         ...(body.role ? { role: body.role } : {}),
         ...(body.active != null ? { active: body.active } : {}),
+        ...(body.permissionOverrides !== undefined
+          ? {
+              permissionOverrides:
+                body.permissionOverrides && Object.keys(normalizarOverrides(body.permissionOverrides)).length
+                  ? normalizarOverrides(body.permissionOverrides)
+                  : Prisma.DbNull,
+            }
+          : {}),
         // senha redefinida por um administrador é, de novo, uma senha que
         // só ele conhece até aqui — mesma trava de troca obrigatória.
         ...(body.password ? { passwordHash: await hashPassword(body.password), mustChangePassword: true } : {}),
       },
-      select: { id: true, name: true, email: true, role: true, active: true, mustChangePassword: true },
+      select: selecaoUsuario,
     });
+    return comPermissoes(user);
   });
 
   /**
@@ -324,13 +409,14 @@ export default async function authRoutes(app: FastifyInstance) {
    * exclusão vira apenas uma desativação (mesmo efeito prático: some da
    * equipe ativa e não consegue mais logar).
    */
-  app.delete('/users/:id', { preHandler: [authenticate, requireRole(...CAN_MANAGE)] }, async (req) => {
+  app.delete('/users/:id', { preHandler: [authenticate, requireCap('GERENCIAR_EQUIPE')] }, async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     if (id === req.user!.id) throw conflict('Você não pode excluir a si mesmo.');
 
     const alvo = await prisma.user.findFirst({ where: { id, companyId: req.user!.companyId } });
     if (!alvo) throw notFound('Pessoa não encontrada.');
     if (alvo.role === 'OWNER') throw conflict('O proprietário não pode ser excluído.');
+    conferirAlcance(req, alvo.role as Role);
 
     try {
       await prisma.user.delete({ where: { id } });

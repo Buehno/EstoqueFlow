@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
-import { authenticate, requireRole, CAN_WRITE_STOCK, CAN_MANAGE } from '../lib/auth.js';
+import { authenticate, requireCap } from '../lib/auth.js';
 import { ajuste, editarMovimento, entrada, estornar, posicao, saida, transferencia } from '../services/stock.service.js';
 
 const baseMove = {
@@ -40,7 +40,7 @@ export default async function stockRoutes(app: FastifyInstance) {
   });
 
   /** ENTRADA */
-  app.post('/movements/entrada', { preHandler: requireRole(...CAN_WRITE_STOCK) }, async (req) => {
+  app.post('/movements/entrada', { preHandler: requireCap('MOVIMENTAR_ESTOQUE') }, async (req) => {
     const body = z
       .object({ ...baseMove, warehouseId: z.string().uuid(), unitCost: z.coerce.number().min(0).optional() })
       .parse(req.body);
@@ -48,13 +48,13 @@ export default async function stockRoutes(app: FastifyInstance) {
   });
 
   /** SAÍDA */
-  app.post('/movements/saida', { preHandler: requireRole(...CAN_WRITE_STOCK) }, async (req) => {
+  app.post('/movements/saida', { preHandler: requireCap('MOVIMENTAR_ESTOQUE') }, async (req) => {
     const body = z.object({ ...baseMove, warehouseId: z.string().uuid() }).parse(req.body);
     return saida({ ...body, companyId: req.user!.companyId, userId: req.user!.id });
   });
 
   /** TRANSFERÊNCIA ENTRE DEPÓSITOS */
-  app.post('/movements/transferencia', { preHandler: requireRole(...CAN_WRITE_STOCK) }, async (req) => {
+  app.post('/movements/transferencia', { preHandler: requireCap('MOVIMENTAR_ESTOQUE') }, async (req) => {
     const body = z
       .object({
         ...baseMove,
@@ -66,7 +66,7 @@ export default async function stockRoutes(app: FastifyInstance) {
   });
 
   /** AJUSTE DE SALDO */
-  app.post('/movements/ajuste', { preHandler: requireRole(...CAN_WRITE_STOCK) }, async (req) => {
+  app.post('/movements/ajuste', { preHandler: requireCap('MOVIMENTAR_ESTOQUE') }, async (req) => {
     const body = z
       .object({
         productId: z.string().uuid(),
@@ -86,7 +86,7 @@ export default async function stockRoutes(app: FastifyInstance) {
    * corrigir um número errado, estorne (abaixo) e lance de novo — assim o
    * histórico real fica registrado em vez de reescrito.
    */
-  app.patch('/movements/:id', { preHandler: requireRole(...CAN_MANAGE) }, async (req) => {
+  app.patch('/movements/:id', { preHandler: requireCap('GERENCIAR_REGRAS_ALERTA') }, async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const body = z
       .object({
@@ -99,7 +99,7 @@ export default async function stockRoutes(app: FastifyInstance) {
   });
 
   /** ESTORNO */
-  app.post('/movements/:id/estorno', { preHandler: requireRole(...CAN_MANAGE) }, async (req) => {
+  app.post('/movements/:id/estorno', { preHandler: requireCap('GERENCIAR_REGRAS_ALERTA') }, async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const body = z.object({ reason: z.string().optional() }).parse(req.body ?? {});
     return estornar(req.user!.companyId, id, req.user!.id, body.reason);

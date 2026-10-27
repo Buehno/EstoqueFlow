@@ -20,7 +20,7 @@ function criarCliente(): PrismaClient {
   // `instanceof` continuarem válidos com os valores que vêm do banco.
   const alvo = Prisma as unknown as Record<string, unknown>;
   const origem = wasm.Prisma as unknown as Record<string, unknown>;
-  for (const k of ['Decimal', 'PrismaClientKnownRequestError', 'PrismaClientValidationError', 'PrismaClientInitializationError', 'PrismaClientUnknownRequestError', 'PrismaClientRustPanicError']) {
+  for (const k of ['Decimal', 'DbNull', 'JsonNull', 'AnyNull', 'PrismaClientKnownRequestError', 'PrismaClientValidationError', 'PrismaClientInitializationError', 'PrismaClientUnknownRequestError', 'PrismaClientRustPanicError']) {
     if (origem[k]) alvo[k] = origem[k];
   }
   const adapter = new PrismaPg(new Pool({ connectionString: process.env.DATABASE_URL }));

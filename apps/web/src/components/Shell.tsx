@@ -7,34 +7,47 @@ import {
 } from 'lucide-react';
 import { cx, useTheme } from '../lib/ui';
 import { useAuth } from '../App';
-import { api } from '../lib/api';
+import { api, type Capacidade } from '../lib/api';
 
-/** Operação do dia a dia — é isso que o time de logística usa o tempo todo. */
-const NAV: { to: string; label: string; icon: typeof ShoppingCart; end?: boolean }[] = [
-  { to: '/app/pdv', label: 'Saída Balcão', icon: ShoppingCart },
-  { to: '/app/propostas', label: 'Propostas', icon: FileText },
-  { to: '/app/movimentacoes/entrada', label: 'Entrada de Estoque', icon: PackagePlus },
-  { to: '/app/movimentacoes/saida', label: 'Saída de Estoque', icon: PackageMinus },
-  { to: '/app/movimentacoes/transferencia', label: 'Transferência entre Depósitos', icon: ArrowLeftRight },
-  { to: '/app/movimentacoes', end: true, label: 'Movimentação de Estoque', icon: ScrollText },
+type ItemNav = { to: string; label: string; icon: typeof ShoppingCart; end?: boolean; caps: Capacidade[] };
+
+/**
+ * Operação do dia a dia — é isso que o time usa o tempo todo. Cada item só
+ * aparece para quem tem a capacidade (papel + liga/desliga por pessoa).
+ */
+export const NAV: ItemNav[] = [
+  { to: '/app/pdv', label: 'Saída Balcão', icon: ShoppingCart, caps: ['VENDER_BALCAO'] },
+  { to: '/app/propostas', label: 'Propostas', icon: FileText, caps: ['GERENCIAR_PROPOSTAS'] },
+  { to: '/app/movimentacoes/entrada', label: 'Entrada de Estoque', icon: PackagePlus, caps: ['MOVIMENTAR_ESTOQUE'] },
+  { to: '/app/movimentacoes/saida', label: 'Saída de Estoque', icon: PackageMinus, caps: ['MOVIMENTAR_ESTOQUE'] },
+  { to: '/app/movimentacoes/transferencia', label: 'Transferência entre Depósitos', icon: ArrowLeftRight, caps: ['MOVIMENTAR_ESTOQUE'] },
+  { to: '/app/movimentacoes', end: true, label: 'Movimentação de Estoque', icon: ScrollText, caps: ['MOVIMENTAR_ESTOQUE', 'VER_RELATORIO_COMPLETO'] },
 ];
 
 /** Cadastros e gestão — fora do caminho, mas a um clique. */
-const NAV_GESTAO: { to: string; label: string; icon: typeof ShoppingCart; end?: boolean }[] = [
-  { to: '/app/painel', label: 'Painel', icon: LayoutDashboard },
-  { to: '/app/produtos', label: 'Produtos', icon: Package },
-  { to: '/app/depositos', label: 'Depósitos', icon: Warehouse },
-  { to: '/app/inventario', label: 'Inventário', icon: ClipboardCheck },
-  { to: '/app/relatorios', label: 'Relatórios', icon: TrendingUp },
-  { to: '/app/integracoes', label: 'Integrações', icon: PlugZap },
-  { to: '/app/equipe', label: 'Equipe', icon: Users },
+export const NAV_GESTAO: ItemNav[] = [
+  { to: '/app/painel', label: 'Painel', icon: LayoutDashboard, caps: ['VER_RELATORIO_RESUMIDO', 'VER_RELATORIO_COMPLETO', 'VER_ALERTAS'] },
+  { to: '/app/produtos', label: 'Produtos', icon: Package, caps: ['GERENCIAR_CADASTROS', 'MOVIMENTAR_ESTOQUE', 'GERENCIAR_PROPOSTAS'] },
+  { to: '/app/depositos', label: 'Depósitos', icon: Warehouse, caps: ['MOVIMENTAR_ESTOQUE', 'GERENCIAR_INVENTARIO', 'VER_RELATORIO_COMPLETO'] },
+  { to: '/app/inventario', label: 'Inventário', icon: ClipboardCheck, caps: ['GERENCIAR_INVENTARIO'] },
+  { to: '/app/relatorios', label: 'Relatórios', icon: TrendingUp, caps: ['VER_RELATORIO_COMPLETO', 'VER_ALERTAS'] },
+  { to: '/app/integracoes', label: 'Integrações', icon: PlugZap, caps: ['GERENCIAR_REGRAS_ALERTA'] },
+  { to: '/app/equipe', label: 'Equipe', icon: Users, caps: ['GERENCIAR_EQUIPE'] },
 ];
+
+/** Primeira tela que a pessoa pode abrir — para o index e para quem cai numa rota proibida. */
+export function primeiraRota(pode: (...caps: Capacidade[]) => boolean): string {
+  const item = [...NAV, ...NAV_GESTAO].find((n) => pode(...n.caps));
+  return item?.to ?? '/app/painel';
+}
 
 export default function Shell() {
   const [open, setOpen] = useState(false);
   const [gestao, setGestao] = useState(false);
   const { dark, toggle } = useTheme();
-  const { me, logout, reload } = useAuth();
+  const { me, logout, reload, pode } = useAuth();
+  const navVisivel = NAV.filter((n) => pode(...n.caps));
+  const navGestaoVisivel = NAV_GESTAO.filter((n) => pode(...n.caps));
   const nav = useNavigate();
 
   const refazerTutorial = async () => {
@@ -75,7 +88,7 @@ export default function Shell() {
 
         <nav className="flex-1 overflow-y-auto p-3">
           <ul className="space-y-1">
-            {NAV.map((n) => (
+            {navVisivel.map((n) => (
               <li key={n.to}>
                 <NavLink to={n.to} end={n.end} onClick={() => setOpen(false)} className={itemClass}>
                   <n.icon size={19} strokeWidth={1.9} className="shrink-0" aria-hidden />
@@ -85,6 +98,7 @@ export default function Shell() {
             ))}
           </ul>
 
+          {navGestaoVisivel.length > 0 && (
           <div className="mt-4 border-t border-line pt-3">
             <button
               onClick={() => setGestao((g) => !g)}
@@ -96,7 +110,7 @@ export default function Shell() {
             </button>
             {gestao && (
               <ul className="mt-1 space-y-0.5 animate-fade-up">
-                {NAV_GESTAO.map((n) => (
+                {navGestaoVisivel.map((n) => (
                   <li key={n.to}>
                     <NavLink to={n.to} end={n.end} onClick={() => setOpen(false)} className={itemClass}>
                       <n.icon size={18} strokeWidth={1.9} className="shrink-0" aria-hidden />
@@ -107,6 +121,7 @@ export default function Shell() {
               </ul>
             )}
           </div>
+          )}
         </nav>
 
         <div className="border-t border-line p-3">
@@ -119,7 +134,7 @@ export default function Shell() {
             </div>
             <div className="min-w-0 flex-1">
               <p className="truncate text-[13px] font-semibold leading-tight">{me?.user.name}</p>
-              <p className="truncate text-[11px] text-faint">{me?.user.role}</p>
+              <p className="truncate text-[11px] text-faint">{me?.user.roleLabel ?? me?.user.role}</p>
             </div>
             <button onClick={logout} className="rounded-lg p-2 text-faint transition-colors hover:text-danger" aria-label="Sair">
               <LogOut size={16} />

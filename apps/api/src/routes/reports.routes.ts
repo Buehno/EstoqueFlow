@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
-import { authenticate, requireRole, CAN_MANAGE } from '../lib/auth.js';
+import { authenticate, requireRole, requireCap, CAN_MANAGE } from '../lib/auth.js';
 import { curvaABC, dashboard, giroEstoque, kardex, vendasPorDia } from '../services/reports.service.js';
 import { duplicados, posicaoCompra, radiografiaFracionados, saldosQuebrados } from '../services/compras.service.js';
 import { gerarRelatorioCompras } from '../services/compras-export.service.js';
@@ -12,14 +12,14 @@ import { env } from '../env.js';
 export default async function reportsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
 
-  app.get('/reports/dashboard', async (req) => dashboard(req.user!.companyId));
+  app.get('/reports/dashboard', { preHandler: requireCap('VER_RELATORIO_RESUMIDO', 'VER_RELATORIO_COMPLETO', 'VER_ALERTAS') }, async (req) => dashboard(req.user!.companyId));
 
   // ═══════════════ REPOSIÇÃO / ALERTA DE COMPRA (regra de 24/09) ═══════════
   /** Posição de compra pelo TOTAL dos dois depósitos, já classificada. */
-  app.get('/reports/compras', async (req) => posicaoCompra(req.user!.companyId));
+  app.get('/reports/compras', { preHandler: requireCap('VER_ALERTAS', 'VER_RELATORIO_COMPLETO') }, async (req) => posicaoCompra(req.user!.companyId));
 
   /** A lista de reposição em planilha: só o que atingiu o ponto de compra. */
-  app.get('/reports/compras/planilha', async (req, reply) => {
+  app.get('/reports/compras/planilha', { preHandler: requireCap('VER_ALERTAS', 'VER_RELATORIO_COMPLETO') }, async (req, reply) => {
     const companyId = req.user!.companyId;
     const [posicao, empresa] = await Promise.all([
       posicaoCompra(companyId),
@@ -34,7 +34,7 @@ export default async function reportsRoutes(app: FastifyInstance) {
 
   // ═══════════════ LIMPEZA DA BASE (pedido de 24/09) ═══════════════════════
   /** Saldos quebrados em item vendido por unidade. */
-  app.get('/reports/saldos-quebrados', async (req) => {
+  app.get('/reports/saldos-quebrados', { preHandler: requireCap('VER_RELATORIO_COMPLETO') }, async (req) => {
     const itens = await saldosQuebrados(req.user!.companyId);
     return { total: itens.length, itens };
   });
@@ -44,10 +44,10 @@ export default async function reportsRoutes(app: FastifyInstance) {
    * quais unidades a plataforma trata como MEDIDA (e por isso preserva) e
    * quais vai arredondar. É a conferência antes de corrigir.
    */
-  app.get('/reports/fracionados', async (req) => radiografiaFracionados(req.user!.companyId));
+  app.get('/reports/fracionados', { preHandler: requireCap('VER_RELATORIO_COMPLETO') }, async (req) => radiografiaFracionados(req.user!.companyId));
 
   /** Arredonda os saldos quebrados gerando um AJUSTE rastreável por item. */
-  app.post('/reports/saldos-quebrados/arredondar', { preHandler: requireRole(...CAN_MANAGE) }, async (req) => {
+  app.post('/reports/saldos-quebrados/arredondar', { preHandler: requireCap('GERENCIAR_REGRAS_ALERTA') }, async (req) => {
     const body = z.object({ confirmar: z.boolean().default(false), motivo: z.string().optional() }).parse(req.body ?? {});
     return arredondarSaldosQuebrados(req.user!.companyId, req.user!.id, {
       dryRun: !body.confirmar,
@@ -56,41 +56,41 @@ export default async function reportsRoutes(app: FastifyInstance) {
   });
 
   /** Grupos de produtos com nome praticamente igual. */
-  app.get('/reports/duplicados', async (req) => {
+  app.get('/reports/duplicados', { preHandler: requireCap('VER_RELATORIO_COMPLETO') }, async (req) => {
     const grupos = await duplicados(req.user!.companyId);
     return { total: grupos.length, grupos };
   });
 
   /** Desativa o cadastro duplicado (zera o saldo por AJUSTE antes, se houver). */
-  app.post('/reports/duplicados/:id/desativar', { preHandler: requireRole(...CAN_MANAGE) }, async (req) => {
+  app.post('/reports/duplicados/:id/desativar', { preHandler: requireCap('GERENCIAR_REGRAS_ALERTA') }, async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const body = z.object({ motivo: z.string().optional() }).parse(req.body ?? {});
     return desativarProdutoDuplicado(req.user!.companyId, id, req.user!.id, body.motivo);
   });
 
-  app.get('/reports/abc', async (req) => {
+  app.get('/reports/abc', { preHandler: requireCap('VER_RELATORIO_COMPLETO') }, async (req) => {
     const q = z.object({ dias: z.coerce.number().min(7).max(730).default(90) }).parse(req.query);
     return curvaABC(req.user!.companyId, q.dias);
   });
 
-  app.get('/reports/giro', async (req) => {
+  app.get('/reports/giro', { preHandler: requireCap('VER_RELATORIO_COMPLETO') }, async (req) => {
     const q = z.object({ dias: z.coerce.number().min(7).max(730).default(90) }).parse(req.query);
     return giroEstoque(req.user!.companyId, q.dias);
   });
 
-  app.get('/reports/kardex/:productId', async (req) => {
+  app.get('/reports/kardex/:productId', { preHandler: requireCap('VER_RELATORIO_COMPLETO', 'MOVIMENTAR_ESTOQUE') }, async (req) => {
     const { productId } = z.object({ productId: z.string().uuid() }).parse(req.params);
     const q = z.object({ dias: z.coerce.number().min(1).max(730).default(180) }).parse(req.query);
     return kardex(req.user!.companyId, productId, q.dias);
   });
 
-  app.get('/reports/vendas-por-dia', async (req) => {
+  app.get('/reports/vendas-por-dia', { preHandler: requireCap('VER_RELATORIO_RESUMIDO', 'VER_RELATORIO_COMPLETO') }, async (req) => {
     const q = z.object({ dias: z.coerce.number().min(1).max(365).default(30) }).parse(req.query);
     return vendasPorDia(req.user!.companyId, q.dias);
   });
 
   /** Exportação CSV genérica de qualquer relatório. */
-  app.get('/reports/export/:tipo', async (req, reply) => {
+  app.get('/reports/export/:tipo', { preHandler: requireCap('VER_RELATORIO_COMPLETO') }, async (req, reply) => {
     const { tipo } = z.object({ tipo: z.enum(['estoque', 'movimentacoes', 'vendas', 'abc']) }).parse(req.params);
     const companyId = req.user!.companyId;
 

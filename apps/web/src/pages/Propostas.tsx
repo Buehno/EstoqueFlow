@@ -63,8 +63,8 @@ export default function Propostas() {
   const [nova, setNova] = useState(false);
   const toast = useToast();
   const nav = useNavigate();
-  const { me } = useAuth();
-  const podeGerenciarModelos = me?.user.role === 'OWNER' || me?.user.role === 'ADMIN';
+  const { pode } = useAuth();
+  const podeGerenciarModelos = pode('GERENCIAR_CADASTROS', 'GERENCIAR_PROPOSTAS');
   const [carregandoPadroes, setCarregandoPadroes] = useState(false);
 
   const carregar = async () => {

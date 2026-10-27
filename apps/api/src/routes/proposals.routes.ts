@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { Prisma, type ProposalStatus } from '@prisma/client';
 import { prisma, nextNumber } from '../lib/prisma.js';
-import { authenticate, requireRole, CAN_SELL, CAN_MANAGE } from '../lib/auth.js';
+import { authenticate, requireRole, requireCap, CAN_MANAGE } from '../lib/auth.js';
 import { badRequest, conflict, notFound, unprocessable } from '../lib/errors.js';
 import { porExtensoEntreParenteses } from '../lib/extenso.js';
 import { gerarDocx, gerarPdf, gerarXlsx, nomeArquivo, type PropostaExport } from '../services/proposal-export.service.js';
@@ -158,7 +158,7 @@ export default async function proposalRoutes(app: FastifyInstance) {
     }));
   });
 
-  app.post('/proposal-templates', { preHandler: requireRole(...CAN_SELL) }, async (req) => {
+  app.post('/proposal-templates', { preHandler: requireCap('GERENCIAR_PROPOSTAS') }, async (req) => {
     const body = z
       .object({
         name: z.string().min(2),
@@ -202,7 +202,7 @@ export default async function proposalRoutes(app: FastifyInstance) {
     });
   });
 
-  app.patch('/proposal-templates/:id', { preHandler: requireRole(...CAN_SELL) }, async (req) => {
+  app.patch('/proposal-templates/:id', { preHandler: requireCap('GERENCIAR_PROPOSTAS') }, async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const body = z
       .object({
@@ -256,7 +256,7 @@ export default async function proposalRoutes(app: FastifyInstance) {
    * exatamente como no documento original. Idempotente: um modelo cujo nome
    * já existe é pulado (não duplica nem sobrescreve o que já foi editado).
    */
-  app.post('/proposal-templates/seed-jundiaquece', { preHandler: requireRole(...CAN_MANAGE) }, async (req) => {
+  app.post('/proposal-templates/seed-jundiaquece', { preHandler: requireCap('GERENCIAR_CADASTROS', 'GERENCIAR_PROPOSTAS') }, async (req) => {
     const companyId = req.user!.companyId;
     const existentes = new Set(
       (await prisma.proposalTemplate.findMany({ where: { companyId }, select: { name: true } })).map((t) => t.name),
@@ -295,7 +295,7 @@ export default async function proposalRoutes(app: FastifyInstance) {
     return { criados, pulados };
   });
 
-  app.delete('/proposal-templates/:id', { preHandler: requireRole(...CAN_MANAGE) }, async (req) => {
+  app.delete('/proposal-templates/:id', { preHandler: requireCap('GERENCIAR_PROPOSTAS') }, async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const modelo = await prisma.proposalTemplate.findFirst({ where: { id, companyId: req.user!.companyId } });
     if (!modelo) throw notFound('Modelo não encontrado.');
@@ -457,7 +457,7 @@ export default async function proposalRoutes(app: FastifyInstance) {
   });
 
   /** Cria a proposta — em branco ou a partir de um modelo salvo. */
-  app.post('/proposals', { preHandler: requireRole(...CAN_SELL) }, async (req) => {
+  app.post('/proposals', { preHandler: requireCap('GERENCIAR_PROPOSTAS') }, async (req) => {
     const body = z
       .object({
         templateId: z.string().uuid().optional(),
@@ -551,7 +551,7 @@ export default async function proposalRoutes(app: FastifyInstance) {
     return serializar(completa);
   });
 
-  app.patch('/proposals/:id', { preHandler: requireRole(...CAN_SELL) }, async (req) => {
+  app.patch('/proposals/:id', { preHandler: requireCap('GERENCIAR_PROPOSTAS') }, async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const body = z.object(corpoSchema).parse(req.body);
 
@@ -585,7 +585,7 @@ export default async function proposalRoutes(app: FastifyInstance) {
    * Substitui a lista de itens inteira. É aqui que a trava de estoque age:
    * item vinculado a produto sem saldo suficiente derruba a gravação.
    */
-  app.put('/proposals/:id/itens', { preHandler: requireRole(...CAN_SELL) }, async (req) => {
+  app.put('/proposals/:id/itens', { preHandler: requireCap('GERENCIAR_PROPOSTAS') }, async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const body = z.object({ items: z.array(itemSchema) }).parse(req.body);
 
@@ -664,7 +664,7 @@ export default async function proposalRoutes(app: FastifyInstance) {
   });
 
   /** Muda o estágio da negociação e deixa registrado quem e quando. */
-  app.post('/proposals/:id/status', { preHandler: requireRole(...CAN_SELL) }, async (req) => {
+  app.post('/proposals/:id/status', { preHandler: requireCap('GERENCIAR_PROPOSTAS') }, async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const body = z
       .object({
@@ -716,7 +716,7 @@ export default async function proposalRoutes(app: FastifyInstance) {
   });
 
   /** Anota o retorno do cliente ou um lembrete de follow-up. */
-  app.post('/proposals/:id/eventos', { preHandler: requireRole(...CAN_SELL) }, async (req) => {
+  app.post('/proposals/:id/eventos', { preHandler: requireCap('GERENCIAR_PROPOSTAS') }, async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const body = z
       .object({
@@ -739,7 +739,7 @@ export default async function proposalRoutes(app: FastifyInstance) {
     return serializar(completa);
   });
 
-  app.post('/proposals/:id/duplicar', { preHandler: requireRole(...CAN_SELL) }, async (req) => {
+  app.post('/proposals/:id/duplicar', { preHandler: requireCap('GERENCIAR_PROPOSTAS') }, async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const companyId = req.user!.companyId;
     const origem = await prisma.proposal.findFirst({ where: { id, companyId }, include: { items: { orderBy: { position: 'asc' } } } });
@@ -780,7 +780,7 @@ export default async function proposalRoutes(app: FastifyInstance) {
   });
 
   /** Transforma a proposta atual num modelo reutilizável. */
-  app.post('/proposals/:id/salvar-como-modelo', { preHandler: requireRole(...CAN_SELL) }, async (req) => {
+  app.post('/proposals/:id/salvar-como-modelo', { preHandler: requireCap('GERENCIAR_PROPOSTAS') }, async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const body = z.object({ name: z.string().min(2) }).parse(req.body);
     const companyId = req.user!.companyId;

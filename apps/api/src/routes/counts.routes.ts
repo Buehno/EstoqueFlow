@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma, nextNumber } from '../lib/prisma.js';
-import { authenticate, requireRole, CAN_WRITE_STOCK } from '../lib/auth.js';
+import { authenticate, requireCap } from '../lib/auth.js';
 import { notFound, unprocessable } from '../lib/errors.js';
 import { ajuste } from '../services/stock.service.js';
 
@@ -9,7 +9,7 @@ export default async function countsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
 
   /** Abre uma contagem: fotografa o saldo esperado de cada produto do depósito. */
-  app.post('/counts', { preHandler: requireRole(...CAN_WRITE_STOCK) }, async (req) => {
+  app.post('/counts', { preHandler: requireCap('GERENCIAR_INVENTARIO') }, async (req) => {
     const body = z
       .object({
         warehouseId: z.string().uuid(),
@@ -93,7 +93,7 @@ export default async function countsRoutes(app: FastifyInstance) {
   });
 
   /** Lança a contagem física de um item (leitura por código de barras inclusa). */
-  app.patch('/counts/:id/items', { preHandler: requireRole(...CAN_WRITE_STOCK) }, async (req) => {
+  app.patch('/counts/:id/items', { preHandler: requireCap('GERENCIAR_INVENTARIO') }, async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const body = z
       .object({
@@ -134,7 +134,7 @@ export default async function countsRoutes(app: FastifyInstance) {
   });
 
   /** Apura divergências (não mexe no estoque ainda). */
-  app.post('/counts/:id/apurar', { preHandler: requireRole(...CAN_WRITE_STOCK) }, async (req) => {
+  app.post('/counts/:id/apurar', { preHandler: requireCap('GERENCIAR_INVENTARIO') }, async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const count = await prisma.inventoryCount.findFirst({
       where: { id, companyId: req.user!.companyId },
@@ -166,7 +166,7 @@ export default async function countsRoutes(app: FastifyInstance) {
   });
 
   /** Aplica os ajustes no estoque. */
-  app.post('/counts/:id/aplicar', { preHandler: requireRole(...CAN_WRITE_STOCK) }, async (req) => {
+  app.post('/counts/:id/aplicar', { preHandler: requireCap('GERENCIAR_INVENTARIO') }, async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const companyId = req.user!.companyId;
 

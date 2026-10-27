@@ -13,8 +13,8 @@ export default function Produtos() {
   const [editing, setEditing] = useState<Product | null>(null);
   const [carregandoTabelas, setCarregandoTabelas] = useState(false);
   const toast = useToast();
-  const { me } = useAuth();
-  const podeCarregarTabelas = me?.user.role === 'OWNER' || me?.user.role === 'ADMIN';
+  const { pode } = useAuth();
+  const podeCarregarTabelas = pode('GERENCIAR_CADASTROS');
 
   /**
    * Carrega/atualiza as tabelas de preço dos fornecedores (SOLIS, SYLLENT,

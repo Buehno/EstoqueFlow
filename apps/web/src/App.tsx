@@ -1,8 +1,8 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { Navigate, Route, Routes, useNavigate } from 'react-router-dom';
-import { api, clearToken, getToken, type Me } from './lib/api';
+import { api, clearToken, getToken, type Me, type Capacidade } from './lib/api';
 import { Spinner } from './lib/ui';
-import Shell from './components/Shell';
+import Shell, { primeiraRota } from './components/Shell';
 import Tour from './components/Tour';
 
 import Login from './pages/Login';
@@ -24,9 +24,18 @@ interface AuthCtx {
   me: Me | null;
   reload: () => Promise<void>;
   logout: () => void;
+  /** `true` se a pessoa tem ao menos uma das capacidades. */
+  pode: (...caps: Capacidade[]) => boolean;
 }
-const Ctx = createContext<AuthCtx>({ me: null, reload: async () => {}, logout: () => {} });
+const Ctx = createContext<AuthCtx>({ me: null, reload: async () => {}, logout: () => {}, pode: () => false });
 export const useAuth = () => useContext(Ctx);
+
+/** Protege uma rota por capacidade: sem ela, manda para a primeira tela permitida. */
+function Pode({ caps, children }: { caps: Capacidade[]; children: ReactNode }) {
+  const { pode } = useAuth();
+  if (!pode(...caps)) return <Navigate to={primeiraRota(pode)} replace />;
+  return <>{children}</>;
+}
 
 export default function App() {
   const [me, setMe] = useState<Me | null>(null);
@@ -42,6 +51,7 @@ export default function App() {
   useEffect(() => { void reload(); }, []);
 
   const logout = () => { clearToken(); setMe(null); nav('/login'); };
+  const pode = (...caps: Capacidade[]) => caps.some((c) => me?.user.caps?.includes(c));
 
   if (loading) {
     return (
@@ -52,25 +62,25 @@ export default function App() {
   }
 
   return (
-    <Ctx.Provider value={{ me, reload, logout }}>
+    <Ctx.Provider value={{ me, reload, logout, pode }}>
       <Routes>
         <Route path="/login" element={me ? <Navigate to="/app" replace /> : <Login onDone={reload} />} />
         <Route path="/" element={<Navigate to={me ? '/app' : '/login'} replace />} />
         <Route path="/app" element={<Guard><Shell /></Guard>}>
           {/* A operação começa no balcão: é a primeira tela depois do login. */}
-          <Route index element={<Navigate to="/app/pdv" replace />} />
-          <Route path="painel" element={<Dashboard />} />
-          <Route path="produtos" element={<Produtos />} />
-          <Route path="depositos" element={<Depositos />} />
-          <Route path="movimentacoes" element={<Movimentacoes />} />
-          <Route path="movimentacoes/:tipo" element={<Movimentar />} />
-          <Route path="pdv" element={<PDV />} />
-          <Route path="propostas" element={<Propostas />} />
-          <Route path="propostas/:id" element={<PropostaEditor />} />
-          <Route path="inventario" element={<Inventario />} />
-          <Route path="relatorios" element={<Relatorios />} />
-          <Route path="integracoes" element={<Integracoes />} />
-          <Route path="equipe" element={<Equipe />} />
+          <Route index element={<Navigate to={primeiraRota(pode)} replace />} />
+          <Route path="painel" element={<Pode caps={['VER_RELATORIO_RESUMIDO', 'VER_RELATORIO_COMPLETO', 'VER_ALERTAS']}><Dashboard /></Pode>} />
+          <Route path="produtos" element={<Pode caps={['GERENCIAR_CADASTROS', 'MOVIMENTAR_ESTOQUE', 'GERENCIAR_PROPOSTAS']}><Produtos /></Pode>} />
+          <Route path="depositos" element={<Pode caps={['MOVIMENTAR_ESTOQUE', 'GERENCIAR_INVENTARIO', 'VER_RELATORIO_COMPLETO']}><Depositos /></Pode>} />
+          <Route path="movimentacoes" element={<Pode caps={['MOVIMENTAR_ESTOQUE', 'VER_RELATORIO_COMPLETO']}><Movimentacoes /></Pode>} />
+          <Route path="movimentacoes/:tipo" element={<Pode caps={['MOVIMENTAR_ESTOQUE']}><Movimentar /></Pode>} />
+          <Route path="pdv" element={<Pode caps={['VENDER_BALCAO']}><PDV /></Pode>} />
+          <Route path="propostas" element={<Pode caps={['GERENCIAR_PROPOSTAS']}><Propostas /></Pode>} />
+          <Route path="propostas/:id" element={<Pode caps={['GERENCIAR_PROPOSTAS']}><PropostaEditor /></Pode>} />
+          <Route path="inventario" element={<Pode caps={['GERENCIAR_INVENTARIO']}><Inventario /></Pode>} />
+          <Route path="relatorios" element={<Pode caps={['VER_RELATORIO_COMPLETO', 'VER_ALERTAS']}><Relatorios /></Pode>} />
+          <Route path="integracoes" element={<Pode caps={['GERENCIAR_REGRAS_ALERTA']}><Integracoes /></Pode>} />
+          <Route path="equipe" element={<Pode caps={['GERENCIAR_EQUIPE']}><Equipe /></Pode>} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

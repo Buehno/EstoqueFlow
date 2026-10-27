@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
-import { authenticate, requireRole, CAN_SELL, CAN_MANAGE } from '../lib/auth.js';
+import { authenticate, requireCap } from '../lib/auth.js';
 import { cancelarVenda, criarVenda } from '../services/sales.service.js';
 import { notFound } from '../lib/errors.js';
 
@@ -9,7 +9,7 @@ export default async function salesRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
 
   /** VENDA BALCÃO */
-  app.post('/sales', { preHandler: requireRole(...CAN_SELL) }, async (req) => {
+  app.post('/sales', { preHandler: requireCap('VENDER_BALCAO') }, async (req) => {
     const body = z
       .object({
         warehouseId: z.string().uuid(),
@@ -143,7 +143,7 @@ export default async function salesRoutes(app: FastifyInstance) {
     };
   });
 
-  app.post('/sales/:id/cancel', { preHandler: requireRole(...CAN_MANAGE) }, async (req) => {
+  app.post('/sales/:id/cancel', { preHandler: requireCap('GERENCIAR_REGRAS_ALERTA') }, async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const body = z.object({ reason: z.string().optional() }).parse(req.body ?? {});
     return cancelarVenda(req.user!.companyId, id, req.user!.id, body.reason);
