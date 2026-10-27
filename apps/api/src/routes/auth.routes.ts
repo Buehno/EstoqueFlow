@@ -23,6 +23,7 @@ import {
   type Capacidade,
 } from '../lib/permissoes.js';
 import { Prisma } from '@prisma/client';
+import { enviarAlerta, enviarTeste, montarResumo } from '../services/alertas-email.service.js';
 import { badRequest, conflict, notFound, unauthorized } from '../lib/errors.js';
 
 const slugify = (s: string) =>
@@ -215,15 +216,21 @@ export default async function authRoutes(app: FastifyInstance) {
   });
 
   // ── Dados da empresa ────────────────────────────────────────────────────
-  app.get('/company', { preHandler: authenticate }, async (req) =>
-    prisma.company.findUnique({
+  app.get('/company', { preHandler: authenticate }, async (req) => {
+    const c = await prisma.company.findUnique({
       where: { id: req.user!.companyId },
       select: {
         id: true, name: true, legalName: true, cnpj: true, slug: true,
         phone: true, email: true, sheetId: true, sheetSyncOn: true, logoUrl: true,
+        alertEmailEnabled: true, alertEmailTo: true, alertEmailHour: true, alertEmailLastAt: true,
+        smtpHost: true, smtpPort: true, smtpSecure: true, smtpUser: true, smtpFrom: true, smtpPass: true,
       },
-    }),
-  );
+    });
+    if (!c) throw unauthorized();
+    // A senha do SMTP nunca volta para a tela — só se está preenchida.
+    const { smtpPass, ...resto } = c;
+    return { ...resto, smtpPassSet: !!smtpPass };
+  });
 
   app.patch('/company', { preHandler: [authenticate, requireRole(...CAN_MANAGE)] }, async (req) => {
     const body = z
@@ -237,8 +244,20 @@ export default async function authRoutes(app: FastifyInstance) {
         sheetSyncOn: z.boolean().optional(),
         // Data URI — logotipo comprimido no navegador antes de enviar.
         logoUrl: z.string().max(700_000).regex(/^data:image\/(png|jpe?g|webp);base64,/).nullable().optional(),
+        // Alerta diário por e-mail + SMTP (Integrações).
+        alertEmailEnabled: z.boolean().optional(),
+        alertEmailTo: z.string().max(500).nullable().optional(),
+        alertEmailHour: z.coerce.number().int().min(0).max(23).optional(),
+        smtpHost: z.string().max(200).nullable().optional(),
+        smtpPort: z.coerce.number().int().min(1).max(65535).nullable().optional(),
+        smtpSecure: z.boolean().optional(),
+        smtpUser: z.string().max(200).nullable().optional(),
+        /** Em branco mantém a senha gravada; preenchida substitui. */
+        smtpPass: z.string().max(500).nullable().optional(),
+        smtpFrom: z.string().max(200).nullable().optional(),
       })
       .parse(req.body);
+    if (body.smtpPass === '') delete body.smtpPass;
 
     // o slug acompanha o nome, mantendo a unicidade
     let slug: string | undefined;
@@ -250,11 +269,33 @@ export default async function authRoutes(app: FastifyInstance) {
       slug = ocupado ? `${base}-${Math.random().toString(36).slice(2, 6)}` : base;
     }
 
-    return prisma.company.update({
+    const atualizada = await prisma.company.update({
       where: { id: req.user!.companyId },
       data: { ...body, email: body.email || undefined, ...(slug ? { slug } : {}) },
-      select: { id: true, name: true, slug: true, legalName: true, cnpj: true, logoUrl: true },
+      select: {
+        id: true, name: true, slug: true, legalName: true, cnpj: true, logoUrl: true,
+        alertEmailEnabled: true, alertEmailTo: true, alertEmailHour: true, alertEmailLastAt: true,
+        smtpHost: true, smtpPort: true, smtpSecure: true, smtpUser: true, smtpFrom: true, smtpPass: true,
+      },
     });
+    const { smtpPass, ...resto } = atualizada;
+    return { ...resto, smtpPassSet: !!smtpPass };
+  });
+
+  // ── Alerta diário por e-mail ─────────────────────────────────────────────
+  /** Manda um e-mail de teste com a configuração atual (sem depender de alerta). */
+  app.post('/company/alerta-email/testar', { preHandler: [authenticate, requireCap('GERENCIAR_REGRAS_ALERTA')] }, async (req) => {
+    const body = z.object({ para: z.string().optional() }).parse(req.body ?? {});
+    return enviarTeste(req.user!.companyId, body.para);
+  });
+  /** Manda o resumo de hoje agora, mesmo fora do horário ou já enviado. */
+  app.post('/company/alerta-email/enviar-agora', { preHandler: [authenticate, requireCap('GERENCIAR_REGRAS_ALERTA')] }, async (req) =>
+    enviarAlerta(req.user!.companyId, { forcar: true }),
+  );
+  /** Prévia do resumo (o que iria no e-mail), sem enviar. */
+  app.get('/company/alerta-email/previa', { preHandler: [authenticate, requireCap('GERENCIAR_REGRAS_ALERTA', 'VER_ALERTAS')] }, async (req) => {
+    const r = await montarResumo(req.user!.companyId);
+    return r ?? { assunto: null, texto: 'Nenhum item em alerta de compra — nada a enviar.', itens: 0 };
   });
 
   // ── Gestão de usuários da empresa ───────────────────────────────────────

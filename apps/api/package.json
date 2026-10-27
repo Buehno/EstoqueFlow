@@ -23,6 +23,7 @@
     "google-auth-library": "^9.15.0",
     "googleapis": "^144.0.0",
     "jsonwebtoken": "^9.0.2",
+    "nodemailer": "^6.10.1",
     "pdfmake": "^0.3.11",
     "zod": "^3.23.8"
   },
@@ -31,9 +32,12 @@
     "@types/bcryptjs": "^2.4.6",
     "@types/jsonwebtoken": "^9.0.7",
     "@types/node": "^22.9.0",
+    "@types/nodemailer": "^6.4.24",
     "@types/pdfmake": "^0.3.3",
     "@types/pg": "^8.23.1",
+    "@types/smtp-server": "^3.5.13",
     "pg": "^8.23.1",
+    "smtp-server": "^3.21.1",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3"
   }

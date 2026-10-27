@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { AlertTriangle, CheckCircle2, ExternalLink, Lock, RefreshCw, ShieldCheck, Upload } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ExternalLink, Lock, Mail, RefreshCw, Send, ShieldCheck, Upload } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { comprimirImagem } from '../lib/imagem';
 import { Badge, Card, dt, Empty, Field, Input, Spinner, Table, useToast } from '../lib/ui';
@@ -8,6 +8,10 @@ import { useAuth } from '../App';
 interface DadosEmpresa {
   id: string; name: string; legalName: string | null; cnpj: string | null; slug: string;
   phone: string | null; email: string | null; logoUrl: string | null;
+  // Alerta diário por e-mail
+  alertEmailEnabled?: boolean; alertEmailTo?: string | null; alertEmailHour?: number; alertEmailLastAt?: string | null;
+  smtpHost?: string | null; smtpPort?: number | null; smtpSecure?: boolean; smtpUser?: string | null; smtpFrom?: string | null;
+  smtpPassSet?: boolean;
 }
 
 interface SyncStatus {
@@ -31,6 +35,47 @@ export default function Integracoes() {
   const toast = useToast();
   const { me } = useAuth();
   const podeEditarEmpresa = me?.user.role === 'OWNER' || me?.user.role === 'GESTOR' || me?.user.role === 'ADMIN';
+  const [salvandoAlerta, setSalvandoAlerta] = useState(false);
+  const [enviandoAlerta, setEnviandoAlerta] = useState<'teste' | 'agora' | null>(null);
+
+  /** Salva a configuração do alerta diário por e-mail + SMTP. */
+  const salvarAlerta = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    const v = (k: string) => String(fd.get(k) ?? '').trim();
+    setSalvandoAlerta(true);
+    try {
+      const atualizada = await api.patch<DadosEmpresa>('/auth/company', {
+        alertEmailEnabled: fd.get('alertEmailEnabled') === 'on',
+        alertEmailTo: v('alertEmailTo') || null,
+        alertEmailHour: Number(v('alertEmailHour') || 8),
+        smtpHost: v('smtpHost') || null,
+        smtpPort: v('smtpPort') ? Number(v('smtpPort')) : null,
+        smtpSecure: fd.get('smtpSecure') === 'on',
+        smtpUser: v('smtpUser') || null,
+        smtpPass: v('smtpPass'), // em branco mantém a senha gravada
+        smtpFrom: v('smtpFrom') || null,
+      });
+      setEmpresa((atual) => ({ ...(atual as DadosEmpresa), ...atualizada }));
+      toast({ kind: 'ok', title: 'Alerta por e-mail salvo' });
+    } catch (err) {
+      toast({ kind: 'err', title: 'Não foi possível salvar', body: err instanceof ApiError ? err.message : undefined });
+    } finally { setSalvandoAlerta(false); }
+  };
+
+  const dispararAlerta = async (modo: 'teste' | 'agora') => {
+    setEnviandoAlerta(modo);
+    try {
+      const r = await api.post<{ enviado: boolean; motivo?: string; para?: string[]; itens?: number }>(
+        modo === 'teste' ? '/auth/company/alerta-email/testar' : '/auth/company/alerta-email/enviar-agora', {},
+      );
+      if (r.enviado) toast({ kind: 'ok', title: modo === 'teste' ? 'E-mail de teste enviado' : `Resumo enviado (${r.itens} item(ns))`, body: r.para?.join(', ') });
+      else toast({ kind: 'err', title: 'Não enviado', body: r.motivo });
+      void carregarEmpresa();
+    } catch (err) {
+      toast({ kind: 'err', title: 'Falha no envio', body: err instanceof ApiError ? err.message : String(err) });
+    } finally { setEnviandoAlerta(null); }
+  };
 
   const load = () => api.get<SyncStatus>('/sync/status').then(setS);
   const carregarEmpresa = () => api.get<DadosEmpresa>('/auth/company').then(setEmpresa);
@@ -152,6 +197,63 @@ export default function Integracoes() {
               </dl>
             )}
           </div>
+        )}
+      </Card>
+
+      <Card
+        title="Alerta diário por e-mail"
+        subtitle="Todo dia, no horário escolhido, a gestora recebe os itens que chegaram a 50% do estoque aceitável e quanto comprar"
+      >
+        {!empresa ? <Spinner /> : (
+          <form onSubmit={salvarAlerta} className="space-y-4">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <label className="flex items-center gap-2 text-[14px] sm:col-span-2">
+                <input type="checkbox" name="alertEmailEnabled" defaultChecked={!!empresa.alertEmailEnabled} disabled={!podeEditarEmpresa} className="h-4 w-4" />
+                <span><b>Enviar o resumo diário</b> — só quando houver item em alerta de compra (sem e-mail vazio)</span>
+              </label>
+              <Field label="Para quem" hint="Um ou mais e-mails, separados por vírgula">
+                <Input name="alertEmailTo" defaultValue={empresa.alertEmailTo ?? ''} placeholder="gestora@jundaquece.com.br, compras@…" disabled={!podeEditarEmpresa} />
+              </Field>
+              <Field label="Horário (Brasília)" hint="Hora cheia, de 0 a 23">
+                <Input name="alertEmailHour" type="number" min={0} max={23} defaultValue={empresa.alertEmailHour ?? 8} disabled={!podeEditarEmpresa} />
+              </Field>
+            </div>
+
+            <div className="rounded-xl border border-line bg-raised p-3.5">
+              <p className="mb-3 flex items-center gap-2 text-[13px] font-semibold"><Mail size={15} /> Remetente (SMTP)</p>
+              <p className="mb-3 text-[12.5px] text-muted">
+                Gmail: servidor <code>smtp.gmail.com</code>, porta 587, usuário = o e-mail, senha = uma <b>senha de app</b> do Google (não a senha normal).
+                Outros provedores: use os dados de SMTP que eles informam.
+              </p>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="Servidor SMTP"><Input name="smtpHost" defaultValue={empresa.smtpHost ?? ''} placeholder="smtp.gmail.com" disabled={!podeEditarEmpresa} /></Field>
+                <div className="grid grid-cols-[1fr_auto] items-end gap-3">
+                  <Field label="Porta"><Input name="smtpPort" type="number" min={1} max={65535} defaultValue={empresa.smtpPort ?? 587} disabled={!podeEditarEmpresa} /></Field>
+                  <label className="mb-2 flex items-center gap-2 text-[13px]"><input type="checkbox" name="smtpSecure" defaultChecked={!!empresa.smtpSecure} disabled={!podeEditarEmpresa} className="h-4 w-4" /> SSL (465)</label>
+                </div>
+                <Field label="Usuário"><Input name="smtpUser" defaultValue={empresa.smtpUser ?? ''} placeholder="loja@gmail.com" disabled={!podeEditarEmpresa} autoComplete="off" /></Field>
+                <Field label="Senha" hint={empresa.smtpPassSet ? 'Já há uma senha gravada — deixe em branco para manter' : 'Senha de app do provedor'}>
+                  <Input name="smtpPass" type="password" placeholder={empresa.smtpPassSet ? '••••••••' : ''} disabled={!podeEditarEmpresa} autoComplete="new-password" />
+                </Field>
+                <Field label="Remetente (De:)" hint="Em branco usa o usuário"><Input name="smtpFrom" defaultValue={empresa.smtpFrom ?? ''} placeholder="EstoqueFlow <loja@gmail.com>" disabled={!podeEditarEmpresa} /></Field>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-[12.5px] text-faint">
+                {empresa.alertEmailLastAt ? `Último envio: ${dt(empresa.alertEmailLastAt)}` : 'Nenhum envio ainda'}
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <button type="button" onClick={() => void dispararAlerta('teste')} disabled={!podeEditarEmpresa || !!enviandoAlerta || !empresa.smtpHost} className="btn-ghost btn-sm gap-2">
+                  <Send size={14} /> {enviandoAlerta === 'teste' ? 'Enviando…' : 'Enviar teste'}
+                </button>
+                <button type="button" onClick={() => void dispararAlerta('agora')} disabled={!podeEditarEmpresa || !!enviandoAlerta || !empresa.smtpHost} className="btn-ghost btn-sm gap-2">
+                  <Send size={14} /> {enviandoAlerta === 'agora' ? 'Enviando…' : 'Enviar resumo agora'}
+                </button>
+                {podeEditarEmpresa && <button type="submit" disabled={salvandoAlerta} className="btn-primary btn-sm">{salvandoAlerta ? 'Salvando…' : 'Salvar'}</button>}
+              </div>
+            </div>
+          </form>
         )}
       </Card>
 

@@ -16,6 +16,7 @@ import { prisma } from './lib/prisma.js';
 import { AppError } from './lib/errors.js';
 import { startSyncWorkers } from './services/sync.service.js';
 import { arredondarTodasAsEmpresas } from './services/stock.service.js';
+import { varreduraAlertasEmail } from './services/alertas-email.service.js';
 
 import authRoutes from './routes/auth.routes.js';
 import catalogRoutes from './routes/catalog.routes.js';
@@ -222,6 +223,17 @@ try {
       );
     setTimeout(varrerSaldosQuebrados, 15_000).unref();
     setInterval(varrerSaldosQuebrados, 60 * 60 * 1000).unref();
+  }
+
+  // Alerta diário por e-mail (27/10): a cada 10 min confere quem está no
+  // horário e ainda não recebeu hoje. `ALERTA_EMAIL_AUTO=off` desliga (testes).
+  if (process.env.ALERTA_EMAIL_AUTO !== 'off') {
+    const varrerAlertas = () =>
+      varreduraAlertasEmail(app.log).catch((e) =>
+        app.log.warn({ err: String(e) }, 'Varredura do alerta por e-mail falhou (a aplicação segue no ar).'),
+      );
+    setTimeout(varrerAlertas, 30_000).unref();
+    setInterval(varrerAlertas, 10 * 60 * 1000).unref();
   }
 } catch (err) {
   app.log.error(err);

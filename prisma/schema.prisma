@@ -88,6 +88,19 @@ model Company {
   email     String?
   logoUrl   String?  @map("logo_url")
 
+  // Alerta diário por e-mail (27/10): resumo dos itens em alerta de compra.
+  // SMTP configurável em Integrações; a senha nunca volta para a tela.
+  alertEmailEnabled Boolean   @default(false) @map("alert_email_enabled")
+  alertEmailTo      String?   @map("alert_email_to")
+  alertEmailHour    Int       @default(8) @map("alert_email_hour")
+  alertEmailLastAt  DateTime? @map("alert_email_last_at")
+  smtpHost          String?   @map("smtp_host")
+  smtpPort          Int?      @map("smtp_port")
+  smtpSecure        Boolean   @default(false) @map("smtp_secure")
+  smtpUser          String?   @map("smtp_user")
+  smtpPass          String?   @map("smtp_pass")
+  smtpFrom          String?   @map("smtp_from")
+
   // Integração Google Sheets (redundância)
   sheetId       String?   @map("sheet_id")
   sheetSyncOn   Boolean   @default(true) @map("sheet_sync_on")
