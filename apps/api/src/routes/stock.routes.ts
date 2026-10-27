@@ -6,7 +6,10 @@ import { ajuste, editarMovimento, entrada, estornar, posicao, saida, transferenc
 
 const baseMove = {
   productId: z.string().uuid(),
-  quantity: z.coerce.number().positive('Quantidade deve ser maior que zero'),
+  /** Com `meters`, a quantidade é ignorada (barra × metro: a movimentação é em metros). */
+  quantity: z.coerce.number().min(0).default(0),
+  /** Barra × metro: metragem movimentada (m). */
+  meters: z.coerce.number().positive().optional(),
   reason: z.string().optional(),
   document: z.string().optional(),
   notes: z.string().optional(),
@@ -72,6 +75,8 @@ export default async function stockRoutes(app: FastifyInstance) {
         productId: z.string().uuid(),
         warehouseId: z.string().uuid(),
         newQuantity: z.coerce.number().min(0),
+        /** Barra × metro: sobra em metros contada (opcional). */
+        newRemnantMeters: z.coerce.number().min(0).optional(),
         reason: z.string().optional(),
         notes: z.string().optional(),
       })
@@ -165,8 +170,10 @@ export default async function stockRoutes(app: FastifyInstance) {
         number: m.number,
         type: m.type,
         status: m.status,
-        product: { id: m.productId, sku: m.product.sku, name: m.product.name, unit: m.product.unit },
+        product: { id: m.productId, sku: m.product.sku, name: m.product.name, unit: m.product.unit, packType: m.product.packType },
         quantity: Number(m.quantity),
+        /** Barra × metro: metragem do lançamento (null quando foi em peças). */
+        meters: m.meters == null ? null : Number(m.meters),
         unitCost: Number(m.unitCost),
         from: m.fromWarehouse ? { id: m.fromWarehouse.id, name: m.fromWarehouse.name } : null,
         to: m.toWarehouse ? { id: m.toWarehouse.id, name: m.toWarehouse.name } : null,

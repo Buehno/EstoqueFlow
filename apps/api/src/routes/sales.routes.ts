@@ -17,7 +17,9 @@ export default async function salesRoutes(app: FastifyInstance) {
           .array(
             z.object({
               productId: z.string().uuid(),
-              quantity: z.coerce.number().positive(),
+              quantity: z.coerce.number().min(0).default(0),
+              /** Barra × metro: vender por metragem (m). */
+              meters: z.coerce.number().positive().optional(),
               unitPrice: z.coerce.number().min(0).optional(),
               discount: z.coerce.number().min(0).optional(),
             }),

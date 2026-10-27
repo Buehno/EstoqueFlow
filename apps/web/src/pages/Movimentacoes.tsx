@@ -110,7 +110,12 @@ export default function Movimentacoes() {
               { key: 'p', header: 'Produto', render: (r) => (
                 <div><p className="font-medium">{r.product.name}</p><p className="font-mono text-[11.5px] text-faint">{r.product.sku}</p></div>
               ) },
-              { key: 'q', header: 'Qtd', align: 'right', render: (r) => <>{qty(r.quantity)} <span className="text-[11.5px] text-faint">{r.product.unit}</span></> },
+              { key: 'q', header: 'Qtd', align: 'right', render: (r) => r.meters != null ? (
+                <div className="text-right">
+                  <span className="tnum">{r.meters.toLocaleString('pt-BR', { maximumFractionDigits: 3 })} m</span> <span className="text-[11.5px] text-faint">({Math.round(r.meters * 100)} cm)</span>
+                  <p className="text-[11px] text-faint tnum">{qty(r.quantity)} peça(s) inteira(s) {r.type === 'ENTRADA' || r.type === 'ESTORNO' ? 'fechada(s)' : 'aberta(s)'}</p>
+                </div>
+              ) : <>{qty(r.quantity)} <span className="text-[11.5px] text-faint">{r.product.unit}</span></> },
               { key: 'f', header: 'Fluxo', render: (r) => (
                 <span className="text-[13px] text-muted">{r.from?.name ?? '—'} → {r.to?.name ?? '—'}</span>
               ) },

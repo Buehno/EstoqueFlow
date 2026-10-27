@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { ArrowLeftRight, ArrowUpRight, Check, PackageMinus, PackagePlus, SlidersHorizontal } from 'lucide-react';
 import { api, ApiError, type Warehouse } from '../lib/api';
-import { Badge, brl, Card, Field, Input, qty, Select, Spinner, useToast } from '../lib/ui';
+import { Badge, brl, Card, cx, Field, Input, qty, Select, Spinner, useToast } from '../lib/ui';
 import ProductSearch, { type ProdutoBusca } from '../components/ProductSearch';
 
 type Tipo = 'entrada' | 'saida' | 'transferencia' | 'ajuste';
@@ -51,6 +51,10 @@ export default function Movimentar() {
   }, [t]);
 
   const padrao = useMemo(() => warehouses.find((w) => w.isDefault) ?? warehouses[0], [warehouses]);
+  // Barra × metro: o lançamento pode ser em peças inteiras, metros ou centímetros.
+  const ehBarra = !!(product?.packType && product.packLength);
+  const [unidadeLanc, setUnidadeLanc] = useState<'PECAS' | 'M' | 'CM'>('PECAS');
+  const nomePeca = product?.packType === 'ROLO' ? 'rolo' : 'barra';
 
   const enviar = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -60,16 +64,23 @@ export default function Movimentar() {
     try {
       const path = `/movements/${t}`;
       const body: Record<string, unknown> = { productId: product.id, reason: f.reason, document: f.document, notes: f.notes };
+      // Em barra/rolo, metros e centímetros viram `meters`; peças seguem em `quantity`.
+      const qtd = Number(f.quantity);
+      const emMetros = ehBarra && unidadeLanc !== 'PECAS';
+      const metros = unidadeLanc === 'CM' ? qtd / 100 : qtd;
       if (t === 'transferencia') {
         body.fromWarehouseId = f.fromWarehouseId;
         body.toWarehouseId = f.toWarehouseId;
-        body.quantity = Number(f.quantity);
+        if (emMetros) body.meters = metros; else body.quantity = qtd;
       } else if (t === 'ajuste') {
         body.warehouseId = f.warehouseId;
         body.newQuantity = Number(f.newQuantity);
+        if (ehBarra && f.newRemnant !== '') {
+          body.newRemnantMeters = unidadeLanc === 'CM' ? Number(f.newRemnant) / 100 : Number(f.newRemnant);
+        }
       } else {
         body.warehouseId = f.warehouseId;
-        body.quantity = Number(f.quantity);
+        if (emMetros) body.meters = metros; else body.quantity = qtd;
         if (t === 'entrada' && f.unitCost) body.unitCost = Number(f.unitCost);
       }
       const res = await api.post<{ number?: number }>(path, body);
@@ -78,7 +89,10 @@ export default function Movimentar() {
         title: `${meta.title} registrada`,
         body: res.number ? `Movimento #${res.number} · ${product.name}` : product.name,
       });
-      setUltimos((u) => [{ id: String(Math.random()), label: product.name, sub: `${f.quantity ?? f.newQuantity} ${product.unit}` }, ...u].slice(0, 5));
+      const subUltimo = t === 'ajuste'
+        ? `${f.newQuantity} ${ehBarra ? `${nomePeca}(s)` : product.unit}`
+        : emMetros ? `${f.quantity} ${unidadeLanc === 'CM' ? 'cm' : 'm'}` : `${f.quantity} ${ehBarra ? `${nomePeca}(s)` : product.unit}`;
+      setUltimos((u) => [{ id: String(Math.random()), label: product.name, sub: subUltimo }, ...u].slice(0, 5));
       const atualizado = await api.get<{ items: ProdutoBusca[] }>(
         `/products/search?q=${encodeURIComponent(product.sku)}&take=1`,
       );
@@ -130,9 +144,15 @@ export default function Movimentar() {
                   {(product.stockByWarehouse ?? []).map((s) => (
                     <span key={s.warehouseId} className="chip bg-surface text-muted">
                       {s.warehouse}: <b className="tnum text-ink">{qty(s.quantity)}</b>
+                      {ehBarra && (s.remnant ?? 0) > 0 && <span className="ml-1 text-faint">+ {s.remnant!.toLocaleString('pt-BR', { maximumFractionDigits: 3 })} m ({Math.round(s.remnant! * 100)} cm)</span>}
                     </span>
                   ))}
                 </div>
+                {ehBarra && product.embalagem && (
+                  <p className="mt-2 text-[12.5px] text-muted">
+                    <b className="text-ink">{product.packType === 'ROLO' ? 'Rolo' : 'Barra'} de {product.embalagem.comprimento}</b> · {product.embalagem.descricao}
+                  </p>
+                )}
               </div>
             )}
 
@@ -162,13 +182,39 @@ export default function Movimentar() {
               )}
 
               <div className="grid gap-4 sm:grid-cols-2">
+                {ehBarra && t !== 'ajuste' && (
+                  <div className="sm:col-span-2">
+                    <span className="label">Lançar em</span>
+                    <div className="mt-1 inline-flex overflow-hidden rounded-lg border border-line" role="group" aria-label="Unidade do lançamento">
+                      {([['PECAS', `${nomePeca}s inteiras`], ['M', 'metros'], ['CM', 'centímetros']] as const).map(([k, label]) => (
+                        <button key={k} type="button" onClick={() => setUnidadeLanc(k)} aria-pressed={unidadeLanc === k}
+                          className={cx('px-3 py-1.5 text-[13px]', unidadeLanc === k ? 'bg-brand/12 font-semibold text-brand' : 'text-muted hover:text-ink')}>
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="mt-1 text-[11.5px] text-faint">
+                      Em metros ou centímetros, a sobra se acumula e fecha {nomePeca === 'rolo' ? 'um rolo' : 'uma barra'} inteira sozinha ao atingir {product?.embalagem?.comprimento}.
+                    </p>
+                  </div>
+                )}
                 {t === 'ajuste' ? (
-                  <Field label="Saldo real contado" required hint="O sistema calcula a diferença sozinho">
-                    <Input name="newQuantity" type="number" step="0.001" min="0" required autoComplete="off" />
-                  </Field>
+                  <>
+                    <Field label={ehBarra ? `${nomePeca === 'rolo' ? 'Rolos' : 'Barras'} inteiras contadas` : 'Saldo real contado'} required hint="O sistema calcula a diferença sozinho">
+                      <Input name="newQuantity" type="number" step={ehBarra ? '1' : '0.001'} min="0" required autoComplete="off" />
+                    </Field>
+                    {ehBarra && (
+                      <Field label={`Sobra em aberto (${unidadeLanc === 'CM' ? 'cm' : 'm'})`} hint="Pedaços cortados somados; em branco mantém a sobra atual">
+                        <div className="flex items-center gap-2">
+                          <Input name="newRemnant" type="number" step="0.001" min="0" autoComplete="off" placeholder={product?.embalagem?.sobra} />
+                          <button type="button" onClick={() => setUnidadeLanc((u) => (u === 'CM' ? 'M' : 'CM'))} className="btn-ghost btn-sm shrink-0">{unidadeLanc === 'CM' ? 'cm' : 'm'}</button>
+                        </div>
+                      </Field>
+                    )}
+                  </>
                 ) : (
-                  <Field label="Quantidade" required>
-                    <Input name="quantity" type="number" step="0.001" min="0.001" required autoComplete="off" />
+                  <Field label={ehBarra ? (unidadeLanc === 'PECAS' ? `Quantidade (${nomePeca}s inteiras)` : unidadeLanc === 'M' ? 'Metragem (m)' : 'Metragem (cm)') : 'Quantidade'} required>
+                    <Input name="quantity" type="number" step={ehBarra && unidadeLanc === 'PECAS' ? '1' : '0.001'} min="0.001" required autoComplete="off" />
                   </Field>
                 )}
                 {t === 'entrada' && (

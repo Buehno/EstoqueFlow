@@ -52,6 +52,9 @@ export default function Depositos() {
         productId: ajustando.productId,
         warehouseId: ajustando.warehouseId,
         newQuantity: Number(String(f.newQuantity).replace(',', '.')),
+        ...(ajustando.embalagem && String(f.newRemnant ?? '').trim() !== ''
+          ? { newRemnantMeters: Number(String(f.newRemnant).replace(',', '.')) }
+          : {}),
         reason: f.reason?.trim() || 'Ajuste manual de saldo',
       });
       toast({ kind: 'ok', title: 'Saldo ajustado', body: `${ajustando.name} · ${ajustando.warehouseCode}` });
@@ -149,10 +152,16 @@ export default function Depositos() {
               <div><p className="font-medium">{r.name}</p><p className="font-mono text-[11.5px] text-faint">{r.sku}</p></div>
             ) },
             { key: 'w', header: 'Depósito', render: (r) => <Badge>{r.warehouseCode}</Badge> },
-            { key: 'q', header: 'Saldo', align: 'right', render: (r) => (
+            { key: 'q', header: 'Saldo', align: 'right', render: (r) => r.embalagem ? (
+              <div className="text-right">
+                <span className={r.belowMin ? 'font-semibold text-danger' : ''}>{r.embalagem.pecasContadas} <span className="text-[11.5px] text-faint">{r.unit}</span></span>
+                <p className="text-[11px] text-faint tnum">{r.embalagem.pecasInteiras} inteira(s){r.embalagem.sobraM > 0 ? ` + ${r.embalagem.sobra} em aberto` : ''}</p>
+                <p className="text-[11px] text-faint tnum">total {r.embalagem.total}</p>
+              </div>
+            ) : (
               <span className={r.belowMin ? 'font-semibold text-danger' : ''}>{qty(r.quantity)} <span className="text-[11.5px] text-faint">{r.unit}</span></span>
             ) },
-            { key: 'm', header: 'Mínimo', align: 'right', render: (r) => qty(r.minStock) },
+            { key: 'm', header: 'Aceitável', align: 'right', render: (r) => qty(r.minStock) },
             { key: 'c', header: 'Custo médio', align: 'right', render: (r) => brl(r.avgCost) },
             { key: 'v', header: 'Valor', align: 'right', render: (r) => <b>{brl(r.stockValue)}</b> },
             { key: 'a', header: '', align: 'right', render: (r) => (
@@ -198,16 +207,21 @@ export default function Depositos() {
               <p className="text-[15px] font-semibold leading-tight">{ajustando.name}</p>
               <p className="mt-0.5 font-mono text-[11.5px] text-faint">{ajustando.sku}</p>
               <p className="mt-2 text-[13px] text-muted">
-                {ajustando.warehouse} · saldo atual <b className="tnum">{qty(ajustando.quantity)} {ajustando.unit}</b>
+                {ajustando.warehouse} · saldo atual <b className="tnum">{ajustando.embalagem ? ajustando.embalagem.descricao : `${qty(ajustando.quantity)} ${ajustando.unit}`}</b>
               </p>
             </div>
             <Field
-              label="Novo saldo"
+              label={ajustando.embalagem ? 'Peças inteiras contadas' : 'Novo saldo'}
               required
-              hint={`Informe a contagem real. ${ajustando.unit.toUpperCase()} vendido por unidade aceita só número inteiro.`}
+              hint={ajustando.embalagem ? `${ajustando.embalagem.comprimento} cada; a sobra vai no campo abaixo` : `Informe a contagem real. ${ajustando.unit.toUpperCase()} vendido por unidade aceita só número inteiro.`}
             >
-              <Input name="newQuantity" type="number" step="0.001" min="0" required autoFocus defaultValue={ajustando.quantity} />
+              <Input name="newQuantity" type="number" step={ajustando.embalagem ? '1' : '0.001'} min="0" required autoFocus defaultValue={ajustando.quantity} />
             </Field>
+            {ajustando.embalagem && (
+              <Field label="Sobra em aberto (metros)" hint="Pedaços cortados somados, em metros (ex.: 2,5). Em branco mantém a sobra atual.">
+                <Input name="newRemnant" type="number" step="0.001" min="0" placeholder={ajustando.embalagem.sobra} />
+              </Field>
+            )}
             <Field label="Motivo" hint="Fica registrado no histórico junto com o seu nome.">
               <Input name="reason" placeholder="Ex.: recontagem na prateleira" />
             </Field>

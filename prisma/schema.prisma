@@ -272,6 +272,14 @@ model Product {
   /// proposta não exige saldo dele. É o caso dos itens das tabelas de fornecedor.
   onDemand Boolean @default(false) @map("on_demand")
 
+  /// Embalagem por comprimento (barra × metro, §4 do plano): "BARRA" ou "ROLO"
+  /// e o comprimento de cada peça em metros (tubo de cobre: BARRA de 5 m).
+  /// O saldo passa a ser contado em PEÇAS inteiras + sobra em metros
+  /// (StockItem.remnant); sobras se acumulam e fecham +1 peça ao atingir o
+  /// comprimento cheio.
+  packType   String?  @map("pack_type")
+  packLength Decimal? @map("pack_length") @db.Decimal(10, 3)
+
   minStock Decimal  @default(0) @map("min_stock") @db.Decimal(14, 3)
   maxStock Decimal? @map("max_stock") @db.Decimal(14, 3)
 
@@ -318,6 +326,9 @@ model StockItem {
 
   quantity Decimal @default(0) @db.Decimal(14, 3)
   reserved Decimal @default(0) @db.Decimal(14, 3)
+  /// Sobra em metros ainda não fechada em peça (0 ≤ remnant < Product.packLength).
+  /// Só tem sentido para produto com embalagem por comprimento.
+  remnant  Decimal @default(0) @db.Decimal(14, 3)
 
   /// Custo médio ponderado mantido por depósito
   avgCost Decimal @default(0) @map("avg_cost") @db.Decimal(14, 4)
@@ -352,6 +363,12 @@ model Movement {
   /// Saldos resultantes (trilha de auditoria imutável)
   balanceFrom Decimal? @map("balance_from") @db.Decimal(14, 3)
   balanceTo   Decimal? @map("balance_to") @db.Decimal(14, 3)
+
+  /// Barra × metro: metragem informada no lançamento (quando foi em metros)
+  /// e a sobra resultante em cada depósito — mesma trilha imutável.
+  meters      Decimal? @db.Decimal(14, 3)
+  remnantFrom Decimal? @map("remnant_from") @db.Decimal(14, 3)
+  remnantTo   Decimal? @map("remnant_to") @db.Decimal(14, 3)
 
   reason   String? // motivo / natureza
   document String? // NF, pedido, OS

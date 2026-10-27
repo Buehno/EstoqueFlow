@@ -89,6 +89,10 @@ export interface Product {
   supplierCode?: string | null;
   /** Vendido sob encomenda: entra na proposta sem exigir saldo. */
   onDemand?: boolean;
+  /** Barra × metro: embalagem por comprimento. */
+  packType?: 'BARRA' | 'ROLO' | null;
+  packLength?: number | null;
+  embalagem?: { pecasInteiras: number; sobraM: number; sobra: string; pecasContadas: number; totalM: number; total: string; descricao: string; comprimento: string } | null;
   category?: { id: string; name: string } | null;
   supplier?: { id: string; name: string } | null;
   totalStock?: number;
@@ -99,11 +103,15 @@ export interface StockRow {
   category: string | null; warehouseId: string; warehouse: string; warehouseCode: string;
   quantity: number; reserved: number; available: number; minStock: number;
   avgCost: number; salePrice: number; stockValue: number; belowMin: boolean;
+  /** Barra × metro: peças inteiras + sobra, em m e cm. */
+  embalagem?: { pecasInteiras: number; sobraM: number; sobra: string; pecasContadas: number; totalM: number; total: string; descricao: string; comprimento: string } | null;
 }
 export interface MovementRow {
   id: string; number: number; type: string; status: string;
-  product: { id: string; sku: string; name: string; unit: string };
+  product: { id: string; sku: string; name: string; unit: string; packType?: string | null };
   quantity: number; unitCost: number;
+  /** Barra × metro: metragem do lançamento (null quando foi em peças). */
+  meters?: number | null;
   from: { id: string; name: string } | null;
   to: { id: string; name: string } | null;
   reason: string | null; document: string | null; notes: string | null; user: string; createdAt: string;

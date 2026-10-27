@@ -5,6 +5,7 @@ import { authenticate, requireRole, requireCap, CAN_MANAGE } from '../lib/auth.j
 import { conflict, notFound } from '../lib/errors.js';
 import { enqueueProduct } from '../services/sync.service.js';
 import { TABELAS_FORNECEDORES } from '../assets/tabelas-fornecedores.js';
+import { FAMILIAS_PADRAO, resumo as resumoEmbalagem } from '../services/embalagem.js';
 
 /**
  * O estoque desta operação não tem etiqueta nem código impresso: o produto é
@@ -51,6 +52,12 @@ function filtroBusca(termo?: string) {
     })),
   };
 }
+
+/** Barra × metro: embalagem por comprimento. */
+const camposEmbalagem = {
+  packType: z.enum(['BARRA', 'ROLO']).nullable().optional(),
+  packLength: z.coerce.number().positive().nullable().optional(),
+};
 
 /** Campos de preço de tabela (fornecedor) aceitos no cadastro de produto. */
 const camposPrecoTabela = {
@@ -236,6 +243,12 @@ export default async function catalogRoutes(app: FastifyInstance) {
         salePrice: Number(p.salePrice),
         cashPrice: p.cashPrice == null ? null : Number(p.cashPrice),
         measure: p.measure == null ? null : Number(p.measure),
+        packLength: p.packLength == null ? null : Number(p.packLength),
+        embalagem: p.packType && p.packLength && Number(p.packLength) > 0
+          ? resumoEmbalagem(
+              { pecas: p.stockItems.reduce((a, s) => a + Number(s.quantity), 0), sobraM: p.stockItems.reduce((a, s) => a + Number(s.remnant), 0) },
+              Number(p.packLength), p.packType)
+          : null,
         minStock: Number(p.minStock),
         maxStock: p.maxStock == null ? null : Number(p.maxStock),
         totalStock: p.stockItems.reduce((a, s) => a + Number(s.quantity), 0),
@@ -247,6 +260,30 @@ export default async function catalogRoutes(app: FastifyInstance) {
         })),
       })),
     };
+  });
+
+  /**
+   * Barra × metro — aplica as famílias padrão (tubo de cobre 5 m, aquatherm
+   * 3 m, marrom 6 m, condulete 3 m, PPR 3 m, Elumaflex rolo 2 m) nos
+   * produtos cujo nome bate com a família e que ainda não têm embalagem
+   * cadastrada. Idempotente; nunca sobrescreve uma embalagem já definida.
+   */
+  app.post('/products/aplicar-embalagens-padrao', { preHandler: requireCap('GERENCIAR_CADASTROS') }, async (req) => {
+    const companyId = req.user!.companyId;
+    const produtos = await prisma.product.findMany({ where: { companyId, active: true, packType: null }, select: { id: true, name: true } });
+    const aplicados: Record<string, number> = {};
+    let total = 0;
+    for (const p of produtos) {
+      const nome = normalizar(p.name);
+      const fam = FAMILIAS_PADRAO.find((f) => f.palavras.some((w) => nome.includes(normalizar(w))));
+      if (!fam) continue;
+      // Só tubos/rolos: "cobre" sozinho pegaria "cotovelo de cobre"; exige a palavra tubo (ou a marca do rolo).
+      if (fam.tipo === 'BARRA' && !/\btubo/.test(nome)) continue;
+      await prisma.product.update({ where: { id: p.id }, data: { packType: fam.tipo, packLength: fam.metros } });
+      aplicados[fam.familia] = (aplicados[fam.familia] ?? 0) + 1;
+      total++;
+    }
+    return { total, aplicados, familias: FAMILIAS_PADRAO };
   });
 
   /**
@@ -362,6 +399,7 @@ export default async function catalogRoutes(app: FastifyInstance) {
         warehouse: s.warehouse.name,
         code: s.warehouse.code,
         quantity: Number(s.quantity),
+        remnant: Number(s.remnant),
       }));
       const medida =
         p.measure != null
@@ -387,6 +425,14 @@ export default async function catalogRoutes(app: FastifyInstance) {
         supplierCode: p.supplierCode,
         supplier: p.supplier?.name ?? null,
         onDemand: p.onDemand,
+        packType: p.packType,
+        packLength: p.packLength == null ? null : Number(p.packLength),
+        // Barra × metro: peças inteiras + sobra, em m e cm, somando os depósitos.
+        embalagem: p.packType && p.packLength && Number(p.packLength) > 0
+          ? resumoEmbalagem(
+              { pecas: p.stockItems.reduce((a, s) => a + Number(s.quantity), 0), sobraM: p.stockItems.reduce((a, s) => a + Number(s.remnant), 0) },
+              Number(p.packLength), p.packType)
+          : null,
         minStock: Number(p.minStock),
         exato: exato ? p.id === exato.id : false,
         totalStock: porDeposito.reduce((a, s) => a + s.quantity, 0),
@@ -441,6 +487,7 @@ export default async function catalogRoutes(app: FastifyInstance) {
         unit: z.string().default('UN'),
         ...camposMedida,
         ...camposPrecoTabela,
+        ...camposEmbalagem,
         costPrice: z.coerce.number().min(0).default(0),
         salePrice: z.coerce.number().min(0).default(0),
         minStock: z.coerce.number().min(0).default(0),
@@ -474,6 +521,8 @@ export default async function catalogRoutes(app: FastifyInstance) {
         priceTable: body.priceTable || null,
         supplierCode: body.supplierCode || null,
         onDemand: body.onDemand ?? false,
+        packType: body.packType ?? null,
+        packLength: body.packType ? body.packLength ?? null : null,
         minStock: body.minStock,
         maxStock: body.maxStock,
         categoryId: body.categoryId || null,
@@ -496,6 +545,7 @@ export default async function catalogRoutes(app: FastifyInstance) {
         unit: z.string().optional(),
         ...camposMedida,
         ...camposPrecoTabela,
+        ...camposEmbalagem,
         costPrice: z.coerce.number().min(0).optional(),
         salePrice: z.coerce.number().min(0).optional(),
         minStock: z.coerce.number().min(0).optional(),
@@ -510,10 +560,14 @@ export default async function catalogRoutes(app: FastifyInstance) {
     if (!exists) throw notFound('Produto não encontrado.');
 
     const mesclado = { ...exists, ...body };
+    if (mesclado.packType && !(mesclado.packLength && Number(mesclado.packLength) > 0)) {
+      throw conflict('Produto em barra/rolo precisa do comprimento da peça em metros.');
+    }
     const product = await prisma.product.update({
       where: { id },
       data: {
         ...body,
+        ...(body.packType === null ? { packLength: null } : {}),
         barcode: body.barcode === '' ? null : body.barcode,
         size: body.size === '' ? null : body.size,
         measureUnit: body.measureUnit === '' ? null : body.measureUnit,

@@ -4,6 +4,7 @@ import { prisma, D, nextNumber } from '../lib/prisma.js';
 import { badRequest, notFound, unprocessable } from '../lib/errors.js';
 import { enqueueMovement, enqueueSale, enqueueStock } from './sync.service.js';
 import { permiteFracao } from './compras.service.js';
+import { entrarMetros, sairMetros, resumo as resumoEmbalagem } from './embalagem.js';
 
 type Tx = Prisma.TransactionClient;
 
@@ -16,14 +17,14 @@ type Tx = Prisma.TransactionClient;
  */
 async function lockStock(tx: Tx, productId: string, warehouseId: string) {
   await tx.$executeRaw`
-    INSERT INTO stock_items (id, product_id, warehouse_id, quantity, reserved, avg_cost, updated_at)
-    VALUES (${randomUUID()}::uuid, ${productId}::uuid, ${warehouseId}::uuid, 0, 0, 0, now())
+    INSERT INTO stock_items (id, product_id, warehouse_id, quantity, reserved, remnant, avg_cost, updated_at)
+    VALUES (${randomUUID()}::uuid, ${productId}::uuid, ${warehouseId}::uuid, 0, 0, 0, 0, now())
     ON CONFLICT (product_id, warehouse_id) DO NOTHING
   `;
   const rows = await tx.$queryRaw<
-    { id: string; quantity: Prisma.Decimal; reserved: Prisma.Decimal; avg_cost: Prisma.Decimal }[]
+    { id: string; quantity: Prisma.Decimal; reserved: Prisma.Decimal; remnant: Prisma.Decimal; avg_cost: Prisma.Decimal }[]
   >`
-    SELECT id, quantity, reserved, avg_cost FROM stock_items
+    SELECT id, quantity, reserved, remnant, avg_cost FROM stock_items
     WHERE product_id = ${productId}::uuid AND warehouse_id = ${warehouseId}::uuid
     FOR UPDATE
   `;
@@ -32,13 +33,17 @@ async function lockStock(tx: Tx, productId: string, warehouseId: string) {
     id: r.id,
     quantity: new Prisma.Decimal(r.quantity),
     reserved: new Prisma.Decimal(r.reserved),
+    remnant: new Prisma.Decimal(r.remnant),
     avgCost: new Prisma.Decimal(r.avg_cost),
   };
 }
 
 export interface SaleItemInput {
   productId: string;
+  /** Unidades do produto (barra/rolo: peças inteiras). */
   quantity: number;
+  /** Barra × metro: vender por METRAGEM. Preço por metro = preço da peça ÷ comprimento, salvo unitPrice. */
+  meters?: number;
   unitPrice?: number;
   discount?: number;
 }
@@ -86,6 +91,10 @@ export async function criarVenda(input: CreateSaleInput) {
       total: Prisma.Decimal;
       stockId: string;
       newQty: Prisma.Decimal;
+      /** Barra × metro: nova sobra, metragem vendida e peças baixadas (para o movimento). */
+      newRemnant: Prisma.Decimal | null;
+      meters: Prisma.Decimal | null;
+      movQty: Prisma.Decimal;
     }[] = [];
 
     // Trava os saldos em ordem fixa por productId (não pela ordem dos itens
@@ -100,15 +109,56 @@ export async function criarVenda(input: CreateSaleInput) {
     for (const item of input.items) {
       const product = byId.get(item.productId);
       if (!product) throw notFound(`Produto ${item.productId} não encontrado.`);
-      if (item.quantity <= 0) throw badRequest(`Quantidade inválida para "${product.name}".`);
+      const ehBarra = !!(product.packType && product.packLength && Number(product.packLength) > 0);
+      if (item.meters != null && !ehBarra) throw badRequest(`"${product.name}" não é cadastrado como barra/rolo: informe a quantidade em unidades.`);
+      if (item.meters == null && item.quantity <= 0) throw badRequest(`Quantidade inválida para "${product.name}".`);
       // Item de unidade não vende fração (regra de 24/09) — ver stock.service.
-      if (!permiteFracao(product.unit) && item.quantity % 1 !== 0) {
+      if (item.meters == null && !permiteFracao(product.unit) && item.quantity % 1 !== 0) {
         throw badRequest(
           `"${product.name}" é vendido por ${product.unit.toUpperCase()}: a quantidade precisa ser inteira (recebi ${item.quantity}).`,
         );
       }
 
       const stock = saldosTravados.get(item.productId)!;
+      const comprimento = product.packType && product.packLength && Number(product.packLength) > 0 ? Number(product.packLength) : null;
+
+      // Barra × metro, vendido por metragem: consome a sobra e abre peças
+      // inteiras pela mesma regra do estoque (embalagem.ts).
+      if (comprimento && item.meters != null) {
+        if (item.meters <= 0) throw badRequest(`Metragem inválida para "${product.name}".`);
+        const estado = { pecas: Number(stock.quantity), sobraM: Number(stock.remnant) };
+        const novo = sairMetros(estado, item.meters, comprimento);
+        if (!novo) {
+          throw unprocessable(
+            `Metragem insuficiente de "${product.name}" em ${warehouse.name}: ${resumoEmbalagem(estado, comprimento, product.packType!).descricao}; venda ${item.meters} m.`,
+          );
+        }
+        const metros = D(item.meters);
+        const unitPrice = D(item.unitPrice ?? Number(product.salePrice) / comprimento); // por metro
+        const unitCost = stock.avgCost.div(comprimento); // custo por metro
+        const itemDiscount = D(item.discount ?? 0);
+        const total = unitPrice.mul(metros).minus(itemDiscount);
+        subtotal = subtotal.plus(unitPrice.mul(metros));
+        costTotal = costTotal.plus(unitCost.mul(metros));
+        prepared.push({
+          productId: product.id,
+          quantity: metros,
+          unitPrice,
+          unitCost,
+          discount: itemDiscount,
+          total,
+          stockId: stock.id,
+          newQty: D(novo.pecas),
+          newRemnant: D(novo.sobraM),
+          meters: metros,
+          movQty: D(Math.abs(novo.pecas - estado.pecas)),
+        });
+        continue;
+      }
+      if (comprimento && item.quantity % 1 !== 0) {
+        throw badRequest(`"${product.name}" é contado em peças (barra/rolo): informe peças inteiras ou a metragem.`);
+      }
+
       const qty = D(item.quantity);
       if (stock.quantity.lt(qty)) {
         throw unprocessable(
@@ -133,6 +183,9 @@ export async function criarVenda(input: CreateSaleInput) {
         total,
         stockId: stock.id,
         newQty: stock.quantity.minus(qty),
+        newRemnant: null,
+        meters: null,
+        movQty: qty,
       });
     }
 
@@ -181,7 +234,7 @@ export async function criarVenda(input: CreateSaleInput) {
     for (const p of prepared) {
       const updated = await tx.stockItem.update({
         where: { id: p.stockId },
-        data: { quantity: p.newQty },
+        data: { quantity: p.newQty, ...(p.newRemnant != null ? { remnant: p.newRemnant } : {}) },
       });
       const movNumber = await nextNumber(tx, input.companyId, 'movement');
       const mov = await tx.movement.create({
@@ -190,10 +243,12 @@ export async function criarVenda(input: CreateSaleInput) {
           number: movNumber,
           type: 'VENDA',
           productId: p.productId,
-          quantity: p.quantity,
+          quantity: p.movQty,
+          meters: p.meters,
           unitCost: p.unitCost,
           fromWarehouseId: input.warehouseId,
           balanceFrom: p.newQty,
+          ...(p.newRemnant != null ? { remnantFrom: p.newRemnant } : {}),
           reason: `Venda balcão #${number}`,
           document: `VENDA-${number}`,
           saleId: sale.id,
@@ -219,13 +274,24 @@ export async function cancelarVenda(companyId: string, saleId: string, userId: s
     if (!sale) throw notFound('Venda não encontrada.');
     if (sale.status === 'CANCELADA') throw unprocessable('Esta venda já foi cancelada.');
 
+    const movsVenda = await tx.movement.findMany({ where: { saleId: sale.id, type: 'VENDA' } });
     const itensEmOrdem = [...sale.items].sort((a, b) => a.productId.localeCompare(b.productId));
     for (const item of itensEmOrdem) {
       const stock = await lockStock(tx, item.productId, sale.warehouseId);
-      const updated = await tx.stockItem.update({
-        where: { id: stock.id },
-        data: { quantity: stock.quantity.plus(item.quantity) },
-      });
+      const produto = await tx.product.findUnique({ where: { id: item.productId } });
+      const comprimento = produto?.packType && produto.packLength && Number(produto.packLength) > 0 ? Number(produto.packLength) : null;
+      const movOrigem = movsVenda.find((m) => m.productId === item.productId && m.meters != null);
+      let dados: Prisma.StockItemUpdateInput;
+      let metrosDevolvidos: Prisma.Decimal | null = null;
+      if (comprimento && movOrigem?.meters != null) {
+        // venda por metragem: devolve a metragem à sobra (fecha peça se der)
+        const novo = entrarMetros({ pecas: Number(stock.quantity), sobraM: Number(stock.remnant) }, Number(movOrigem.meters), comprimento);
+        dados = { quantity: D(novo.pecas), remnant: D(novo.sobraM) };
+        metrosDevolvidos = movOrigem.meters;
+      } else {
+        dados = { quantity: stock.quantity.plus(item.quantity) };
+      }
+      const updated = await tx.stockItem.update({ where: { id: stock.id }, data: dados });
 
       const movNumber = await nextNumber(tx, companyId, 'movement');
       const mov = await tx.movement.create({
@@ -234,10 +300,12 @@ export async function cancelarVenda(companyId: string, saleId: string, userId: s
           number: movNumber,
           type: 'ESTORNO',
           productId: item.productId,
-          quantity: item.quantity,
+          quantity: metrosDevolvidos ? (movOrigem?.quantity ?? item.quantity) : item.quantity,
+          meters: metrosDevolvidos,
           unitCost: item.unitCost,
           toWarehouseId: sale.warehouseId,
           balanceTo: updated.quantity,
+          ...(metrosDevolvidos ? { remnantTo: updated.remnant } : {}),
           reason: motivo ?? `Cancelamento da venda #${sale.number}`,
           document: `CANC-${sale.number}`,
           saleId: sale.id,

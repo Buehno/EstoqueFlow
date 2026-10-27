@@ -23,11 +23,29 @@ export interface ProdutoBusca {
   supplierCode?: string | null;
   supplier?: string | null;
   onDemand?: boolean;
+  /** Barra × metro. */
+  packType?: 'BARRA' | 'ROLO' | null;
+  packLength?: number | null;
+  embalagem?: ResumoEmbalagem | null;
   minStock: number;
   exato: boolean;
   totalStock: number;
   saldoNoDeposito: number | null;
-  stockByWarehouse: { warehouseId: string; warehouse: string; code: string; quantity: number }[];
+  stockByWarehouse: { warehouseId: string; warehouse: string; code: string; quantity: number; remnant?: number }[];
+}
+
+/** Resumo de barra × metro que a API devolve — sempre com m e cm juntos. */
+export interface ResumoEmbalagem {
+  tipo: string;
+  comprimentoM: number;
+  comprimento: string;
+  pecasInteiras: number;
+  sobraM: number;
+  sobra: string;
+  pecasContadas: number;
+  totalM: number;
+  total: string;
+  descricao: string;
 }
 
 /**
@@ -191,6 +209,7 @@ export default function ProductSearch({
                           {qty(saldo)}
                         </span>
                         {p.salePrice > 0 && <span className="block text-[11.5px] text-faint tnum">{brl(p.salePrice)}</span>}
+                        {p.embalagem && <span className="block text-[11px] text-faint tnum">{p.embalagem.total}</span>}
                       </span>
                     </button>
                   </li>

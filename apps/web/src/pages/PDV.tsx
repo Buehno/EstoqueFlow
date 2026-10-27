@@ -4,7 +4,9 @@ import { api, ApiError, type Warehouse } from '../lib/api';
 import { brl, Card, Empty, Field, Input, Modal, qty, Select, useToast } from '../lib/ui';
 import ProductSearch, { type ProdutoBusca } from '../components/ProductSearch';
 
-interface Item { product: ProdutoBusca; quantity: number; unitPrice: number }
+/** Barra × metro: `porMetro` vende pela metragem (quantity em m, unitPrice por metro). */
+interface Item { product: ProdutoBusca; quantity: number; unitPrice: number; porMetro?: boolean }
+const ehBarra = (p: ProdutoBusca) => !!(p.packType && p.packLength);
 
 const PAGAMENTOS = [
   { v: 'DINHEIRO', label: 'Dinheiro', icon: Banknote },
@@ -52,6 +54,15 @@ export default function PDV() {
 
   const setQty = (id: string, q: number) =>
     setItens((prev) => prev.map((i) => (i.product.id === id ? { ...i, quantity: Math.max(0.001, q) } : i)));
+  /** Alterna peça inteira ↔ metragem; o preço acompanha (peça ÷ comprimento). */
+  const alternarMetro = (id: string) =>
+    setItens((prev) => prev.map((i) => {
+      if (i.product.id !== id) return i;
+      const comp = i.product.packLength ?? 1;
+      return i.porMetro
+        ? { ...i, porMetro: false, quantity: 1, unitPrice: i.product.salePrice }
+        : { ...i, porMetro: true, quantity: 1, unitPrice: Math.round((i.product.salePrice / comp) * 100) / 100 };
+    }));
   const remove = (id: string) => setItens((prev) => prev.filter((i) => i.product.id !== id));
 
   const finalizar = async () => {
@@ -60,7 +71,9 @@ export default function PDV() {
     try {
       const venda = await api.post<any>('/sales', {
         warehouseId,
-        items: itens.map((i) => ({ productId: i.product.id, quantity: i.quantity, unitPrice: i.unitPrice })),
+        items: itens.map((i) => (i.porMetro
+          ? { productId: i.product.id, meters: i.quantity, unitPrice: i.unitPrice }
+          : { productId: i.product.id, quantity: i.quantity, unitPrice: i.unitPrice })),
         discount: desconto || undefined,
         payment: pagamento,
         received: pagamento === 'DINHEIRO' && recebido ? Number(recebido) : undefined,
@@ -112,7 +125,13 @@ export default function PDV() {
                       <p className="truncate text-[14.5px] font-medium">{i.product.name}</p>
                       <p className="text-[11.5px] text-faint">
                         {[i.product.size, i.product.medidaFormatada, i.product.unit].filter(Boolean).join(' · ')}
+                        {ehBarra(i.product) && i.product.embalagem && <> · {i.product.embalagem.total} em estoque</>}
                       </p>
+                      {ehBarra(i.product) && (
+                        <button type="button" onClick={() => alternarMetro(i.product.id)} className="mt-1 text-[11.5px] font-medium text-brand underline-offset-2 hover:underline">
+                          {i.porMetro ? `vendendo por metro (R$/m) — trocar para ${i.product.packType === 'ROLO' ? 'rolo' : 'barra'} inteira` : `vender por metro (${i.product.embalagem?.comprimento ?? ''} a peça)`}
+                        </button>
+                      )}
                     </div>
 
                     <div className="flex items-center gap-1">
@@ -123,8 +142,9 @@ export default function PDV() {
                         value={i.quantity}
                         onChange={(e) => setQty(i.product.id, Number(e.target.value) || 0)}
                         className="field field-sm w-16 text-center tnum"
-                        aria-label={`Quantidade de ${i.product.name}`}
+                        aria-label={i.porMetro ? `Metragem de ${i.product.name} (m)` : `Quantidade de ${i.product.name}`}
                       />
+                      {i.porMetro && <span className="text-[11.5px] text-faint">m ({Math.round(i.quantity * 100)} cm)</span>}
                       <button onClick={() => setQty(i.product.id, i.quantity + 1)} className="grid h-9 w-9 place-items-center rounded-lg border border-line text-muted transition-colors hover:text-ink" aria-label="Aumentar quantidade">
                         <Plus size={15} />
                       </button>

@@ -4,6 +4,7 @@ import { prisma, D, nextNumber } from '../lib/prisma.js';
 import { badRequest, notFound, unprocessable } from '../lib/errors.js';
 import { enqueueStock, enqueueMovement } from './sync.service.js';
 import { permiteFracao, saldosQuebrados } from './compras.service.js';
+import { entrarMetros, sairMetros, normalizar, resumo as resumoEmbalagem, type EstadoEmbalagem } from './embalagem.js';
 
 type Tx = Prisma.TransactionClient;
 
@@ -13,7 +14,13 @@ export interface MoveInput {
   companyId: string;
   userId: string;
   productId: string;
+  /** Quantidade em unidades do produto (para barra/rolo: PEÇAS inteiras). */
   quantity: number;
+  /**
+   * Barra × metro: quando informado, a movimentação é em METROS e `quantity`
+   * é ignorada — o serviço consome/forma sobras e fecha peças inteiras.
+   */
+  meters?: number;
   unitCost?: number;
   reason?: string;
   document?: string;
@@ -39,14 +46,14 @@ async function getOrCreateStock(tx: Tx, productId: string, warehouseId: string) 
   // Cria a linha primeiro (fora do lock — não dá pra travar o que não
   // existe). `ON CONFLICT DO NOTHING` deixa concorrência na criação segura.
   await tx.$executeRaw`
-    INSERT INTO stock_items (id, product_id, warehouse_id, quantity, reserved, avg_cost, updated_at)
-    VALUES (${randomUUID()}::uuid, ${productId}::uuid, ${warehouseId}::uuid, 0, 0, 0, now())
+    INSERT INTO stock_items (id, product_id, warehouse_id, quantity, reserved, remnant, avg_cost, updated_at)
+    VALUES (${randomUUID()}::uuid, ${productId}::uuid, ${warehouseId}::uuid, 0, 0, 0, 0, now())
     ON CONFLICT (product_id, warehouse_id) DO NOTHING
   `;
   const rows = await tx.$queryRaw<
-    { id: string; quantity: Prisma.Decimal; reserved: Prisma.Decimal; avg_cost: Prisma.Decimal }[]
+    { id: string; quantity: Prisma.Decimal; reserved: Prisma.Decimal; remnant: Prisma.Decimal; avg_cost: Prisma.Decimal }[]
   >`
-    SELECT id, quantity, reserved, avg_cost FROM stock_items
+    SELECT id, quantity, reserved, remnant, avg_cost FROM stock_items
     WHERE product_id = ${productId}::uuid AND warehouse_id = ${warehouseId}::uuid
     FOR UPDATE
   `;
@@ -57,6 +64,7 @@ async function getOrCreateStock(tx: Tx, productId: string, warehouseId: string) 
     warehouseId,
     quantity: new Prisma.Decimal(r.quantity),
     reserved: new Prisma.Decimal(r.reserved),
+    remnant: new Prisma.Decimal(r.remnant),
     avgCost: new Prisma.Decimal(r.avg_cost),
   };
 }
@@ -92,20 +100,71 @@ async function assertScope(tx: Tx, companyId: string, productId: string, warehou
   return { product, warehouses: ws };
 }
 
+/** Comprimento da peça quando o produto é barra/rolo; null para os demais. */
+function comprimentoDe(product: { packType: string | null; packLength: Prisma.Decimal | null }): number | null {
+  const c = product.packLength == null ? 0 : Number(product.packLength);
+  return product.packType && c > 0 ? c : null;
+}
+
+/**
+ * Resolve o que a movimentação significa em PEÇAS e SOBRA para um produto
+ * de barra/rolo. Em metros: aplica a regra de sobras (embalagem.ts). Em
+ * peças: mexe só nas inteiras. Devolve o novo estado e a variação de peças
+ * (pode ser zero quando a saída saiu toda da sobra).
+ */
+/** Metragem só faz sentido em produto de barra/rolo. */
+function assertMetrosPermitidos(comprimento: number | null, meters: number | undefined, nome: string) {
+  if (meters != null && !comprimento) {
+    throw badRequest(`"${nome}" não é cadastrado como barra/rolo: informe a quantidade em unidades, não em metros.`);
+  }
+}
+
+function aplicarEmbalagem(
+  sentido: 'ENTRADA' | 'SAIDA',
+  atual: { quantity: Prisma.Decimal; remnant: Prisma.Decimal },
+  comprimento: number,
+  input: { quantity: number; meters?: number },
+  nome: string,
+): { estado: EstadoEmbalagem; deltaPecas: Prisma.Decimal; metros: number | null } {
+  const estado: EstadoEmbalagem = { pecas: Number(atual.quantity), sobraM: Number(atual.remnant) };
+  if (input.meters != null) {
+    if (input.meters <= 0) throw badRequest('A metragem deve ser maior que zero.');
+    const novo = sentido === 'ENTRADA' ? entrarMetros(estado, input.meters, comprimento) : sairMetros(estado, input.meters, comprimento);
+    if (!novo) {
+      throw unprocessable(
+        `Metragem insuficiente de "${nome}": ${resumoEmbalagem(estado, comprimento, 'BARRA').descricao}; solicitado ${input.meters} m.`,
+      );
+    }
+    return { estado: novo, deltaPecas: D(novo.pecas - estado.pecas), metros: input.meters };
+  }
+  if (input.quantity % 1 !== 0) {
+    throw badRequest(`"${nome}" é contado em peças (barra/rolo): informe peças inteiras ou a metragem em metros/centímetros.`);
+  }
+  const pecas = sentido === 'ENTRADA' ? estado.pecas + input.quantity : estado.pecas - input.quantity;
+  if (pecas < 0) {
+    throw unprocessable(`Saldo insuficiente de "${nome}": ${resumoEmbalagem(estado, comprimento, 'BARRA').descricao}.`);
+  }
+  return { estado: normalizar({ pecas, sobraM: estado.sobraM }, comprimento), deltaPecas: D(sentido === 'ENTRADA' ? input.quantity : -input.quantity), metros: null };
+}
+
 /**
  * ENTRADA — soma ao depósito e recalcula o custo médio ponderado.
  */
 export async function entrada(input: MoveInput & { warehouseId: string }) {
-  if (input.quantity <= 0) throw badRequest('A quantidade da entrada deve ser maior que zero.');
+  if (input.meters == null && input.quantity <= 0) throw badRequest('A quantidade da entrada deve ser maior que zero.');
 
   return prisma.$transaction(async (tx) => {
     const { product } = await assertScope(tx, input.companyId, input.productId, [
       input.warehouseId,
     ]);
-    assertQuantidadeInteira(product.unit, product.name, input.quantity);
+    const comprimento = comprimentoDe(product);
+    assertMetrosPermitidos(comprimento, input.meters, product.name);
+    if (!comprimento) assertQuantidadeInteira(product.unit, product.name, input.quantity);
+    else if (input.meters == null && input.quantity <= 0) throw badRequest('A quantidade da entrada deve ser maior que zero.');
 
     const stock = await getOrCreateStock(tx, input.productId, input.warehouseId);
-    const qty = D(input.quantity);
+    const emb = comprimento ? aplicarEmbalagem('ENTRADA', stock, comprimento, input, product.name) : null;
+    const qty = emb ? emb.deltaPecas : D(input.quantity);
     const cost = D(input.unitCost ?? Number(product.costPrice));
 
     const newQty = stock.quantity.plus(qty);
@@ -116,7 +175,7 @@ export async function entrada(input: MoveInput & { warehouseId: string }) {
 
     const updated = await tx.stockItem.update({
       where: { id: stock.id },
-      data: { quantity: newQty, avgCost: newAvg },
+      data: { quantity: newQty, avgCost: newAvg, ...(emb ? { remnant: D(emb.estado.sobraM) } : {}) },
     });
 
     const number = await nextNumber(tx, input.companyId, 'movement');
@@ -130,6 +189,7 @@ export async function entrada(input: MoveInput & { warehouseId: string }) {
         unitCost: cost,
         toWarehouseId: input.warehouseId,
         balanceTo: newQty,
+        ...(emb ? { meters: emb.metros, remnantTo: D(emb.estado.sobraM) } : {}),
         reason: input.reason ?? 'Entrada de mercadoria',
         document: input.document,
         notes: input.notes,
@@ -148,26 +208,30 @@ export async function entrada(input: MoveInput & { warehouseId: string }) {
  * SAÍDA — baixa do depósito. Bloqueia saldo negativo (salvo allowNegative).
  */
 export async function saida(input: MoveInput & { warehouseId: string }) {
-  if (input.quantity <= 0) throw badRequest('A quantidade da saída deve ser maior que zero.');
+  if (input.meters == null && input.quantity <= 0) throw badRequest('A quantidade da saída deve ser maior que zero.');
 
   return prisma.$transaction(async (tx) => {
     const { product } = await assertScope(tx, input.companyId, input.productId, [
       input.warehouseId,
     ]);
-    assertQuantidadeInteira(product.unit, product.name, input.quantity);
+    const comprimento = comprimentoDe(product);
+    assertMetrosPermitidos(comprimento, input.meters, product.name);
+    if (!comprimento) assertQuantidadeInteira(product.unit, product.name, input.quantity);
+    else if (input.meters == null && input.quantity <= 0) throw badRequest('A quantidade da saída deve ser maior que zero.');
     const stock = await getOrCreateStock(tx, input.productId, input.warehouseId);
-    const qty = D(input.quantity);
+    const emb = comprimento ? aplicarEmbalagem('SAIDA', stock, comprimento, input, product.name) : null;
+    const qty = emb ? emb.deltaPecas.abs() : D(input.quantity);
 
-    if (!input.allowNegative && stock.quantity.lt(qty)) {
+    if (!emb && !input.allowNegative && stock.quantity.lt(qty)) {
       throw unprocessable(
         `Saldo insuficiente de "${product.name}": disponível ${stock.quantity.toFixed(3)}, solicitado ${qty.toFixed(3)}.`,
       );
     }
 
-    const newQty = stock.quantity.minus(qty);
+    const newQty = emb ? D(emb.estado.pecas) : stock.quantity.minus(qty);
     const updated = await tx.stockItem.update({
       where: { id: stock.id },
-      data: { quantity: newQty },
+      data: { quantity: newQty, ...(emb ? { remnant: D(emb.estado.sobraM) } : {}) },
     });
 
     const number = await nextNumber(tx, input.companyId, 'movement');
@@ -181,6 +245,7 @@ export async function saida(input: MoveInput & { warehouseId: string }) {
         unitCost: stock.avgCost,
         fromWarehouseId: input.warehouseId,
         balanceFrom: newQty,
+        ...(emb ? { meters: emb.metros, remnantFrom: D(emb.estado.sobraM) } : {}),
         reason: input.reason ?? 'Saída de mercadoria',
         document: input.document,
         notes: input.notes,
@@ -202,7 +267,7 @@ export async function saida(input: MoveInput & { warehouseId: string }) {
 export async function transferencia(
   input: MoveInput & { fromWarehouseId: string; toWarehouseId: string },
 ) {
-  if (input.quantity <= 0) throw badRequest('A quantidade da transferência deve ser maior que zero.');
+  if (input.meters == null && input.quantity <= 0) throw badRequest('A quantidade da transferência deve ser maior que zero.');
   if (input.fromWarehouseId === input.toWarehouseId) {
     throw badRequest('Depósito de origem e destino não podem ser o mesmo.');
   }
@@ -212,7 +277,10 @@ export async function transferencia(
       input.fromWarehouseId,
       input.toWarehouseId,
     ]);
-    assertQuantidadeInteira(product.unit, product.name, input.quantity);
+    const comprimento = comprimentoDe(product);
+    assertMetrosPermitidos(comprimento, input.meters, product.name);
+    if (!comprimento) assertQuantidadeInteira(product.unit, product.name, input.quantity);
+    else if (input.meters == null && input.quantity <= 0) throw badRequest('A quantidade da transferência deve ser maior que zero.');
 
     // Trava os dois depósitos numa ORDEM FIXA (pelo id, não por origem/
     // destino) — senão uma transferência A->B e outra B->A do mesmo produto,
@@ -227,27 +295,33 @@ export async function transferencia(
     travados.set(segundoId, await getOrCreateStock(tx, input.productId, segundoId));
     const from = travados.get(input.fromWarehouseId)!;
     const to = travados.get(input.toWarehouseId)!;
-    const qty = D(input.quantity);
+    // Barra × metro: sai da origem e entra no destino pela mesma regra de
+    // sobras — em metros, a metragem é a mesma dos dois lados; em peças, as
+    // inteiras.
+    const embFrom = comprimento ? aplicarEmbalagem('SAIDA', from, comprimento, input, product.name) : null;
+    const embTo = comprimento ? aplicarEmbalagem('ENTRADA', to, comprimento, input, product.name) : null;
+    const qty = embFrom ? embFrom.deltaPecas.abs() : D(input.quantity);
 
-    if (from.quantity.lt(qty)) {
+    if (!embFrom && from.quantity.lt(qty)) {
       throw unprocessable(
         `Saldo insuficiente na origem para "${product.name}": disponível ${from.quantity.toFixed(3)}.`,
       );
     }
 
-    const newFrom = from.quantity.minus(qty);
-    const newTo = to.quantity.plus(qty);
+    const newFrom = embFrom ? D(embFrom.estado.pecas) : from.quantity.minus(qty);
+    const newTo = embTo ? D(embTo.estado.pecas) : to.quantity.plus(qty);
+    const entrouPecas = embTo ? embTo.deltaPecas : qty;
     const newToAvg = newTo.gt(0)
-      ? to.quantity.mul(to.avgCost).plus(qty.mul(from.avgCost)).div(newTo)
+      ? to.quantity.mul(to.avgCost).plus(entrouPecas.mul(from.avgCost)).div(newTo)
       : from.avgCost;
 
     const uFrom = await tx.stockItem.update({
       where: { id: from.id },
-      data: { quantity: newFrom },
+      data: { quantity: newFrom, ...(embFrom ? { remnant: D(embFrom.estado.sobraM) } : {}) },
     });
     const uTo = await tx.stockItem.update({
       where: { id: to.id },
-      data: { quantity: newTo, avgCost: newToAvg },
+      data: { quantity: newTo, avgCost: newToAvg, ...(embTo ? { remnant: D(embTo.estado.sobraM) } : {}) },
     });
 
     const number = await nextNumber(tx, input.companyId, 'movement');
@@ -263,6 +337,7 @@ export async function transferencia(
         toWarehouseId: input.toWarehouseId,
         balanceFrom: newFrom,
         balanceTo: newTo,
+        ...(embFrom && embTo ? { meters: embFrom.metros, remnantFrom: D(embFrom.estado.sobraM), remnantTo: D(embTo.estado.sobraM) } : {}),
         reason: input.reason ?? 'Transferência entre depósitos',
         document: input.document,
         notes: input.notes,
@@ -282,22 +357,40 @@ export async function transferencia(
  * AJUSTE — define o saldo real de um produto no depósito (contagem/acerto).
  */
 export async function ajuste(
-  input: Omit<MoveInput, 'quantity'> & { warehouseId: string; newQuantity: number; countId?: string },
+  input: Omit<MoveInput, 'quantity' | 'meters'> & {
+    warehouseId: string;
+    /** Peças inteiras contadas (para barra/rolo) ou a quantidade (demais). */
+    newQuantity: number;
+    /** Barra × metro: sobra em metros contada fisicamente (opcional; omitido = mantém). */
+    newRemnantMeters?: number;
+    countId?: string;
+  },
 ) {
   if (input.newQuantity < 0) throw badRequest('O saldo ajustado não pode ser negativo.');
 
   return prisma.$transaction(async (tx) => {
     const { product } = await assertScope(tx, input.companyId, input.productId, [input.warehouseId]);
-    assertQuantidadeInteira(product.unit, product.name, input.newQuantity);
+    const comprimento = comprimentoDe(product);
+    if (!comprimento) assertQuantidadeInteira(product.unit, product.name, input.newQuantity);
+    else if (input.newQuantity % 1 !== 0) throw badRequest(`"${product.name}" é contado em peças inteiras; a sobra vai em metros.`);
     const stock = await getOrCreateStock(tx, input.productId, input.warehouseId);
 
-    const target = D(input.newQuantity);
+    let target = D(input.newQuantity);
+    let sobra: Prisma.Decimal | null = null;
+    if (comprimento) {
+      const desejada = input.newRemnantMeters ?? Number(stock.remnant);
+      if (desejada < 0) throw badRequest('A sobra em metros não pode ser negativa.');
+      const n = normalizar({ pecas: input.newQuantity, sobraM: desejada }, comprimento);
+      target = D(n.pecas);
+      sobra = D(n.sobraM);
+    }
     const diff = target.minus(stock.quantity);
-    if (diff.isZero()) return null;
+    const sobraMudou = sobra != null && !sobra.eq(stock.remnant);
+    if (diff.isZero() && !sobraMudou) return null;
 
     const updated = await tx.stockItem.update({
       where: { id: stock.id },
-      data: { quantity: target },
+      data: { quantity: target, ...(sobra != null ? { remnant: sobra } : {}) },
     });
 
     const number = await nextNumber(tx, input.companyId, 'movement');
@@ -313,6 +406,7 @@ export async function ajuste(
         toWarehouseId: diff.isNegative() ? null : input.warehouseId,
         balanceFrom: diff.isNegative() ? target : null,
         balanceTo: diff.isNegative() ? null : target,
+        ...(sobra != null ? (diff.isNegative() ? { remnantFrom: sobra } : { remnantTo: sobra }) : {}),
         reason: input.reason ?? 'Ajuste de inventário',
         document: input.document,
         notes: input.notes,
@@ -350,19 +444,25 @@ export async function estornar(companyId: string, movementId: string, userId: st
       await getOrCreateStock(tx, mov.productId, id);
     }
 
+    const produto = await tx.product.findUnique({ where: { id: mov.productId } });
+    const comprimento = produto ? comprimentoDe(produto) : null;
+    const metros = mov.meters == null ? null : Number(mov.meters);
+
     if (mov.toWarehouseId) {
       const s = await getOrCreateStock(tx, mov.productId, mov.toWarehouseId);
+      const emb = comprimento && metros ? aplicarEmbalagem('SAIDA', s, comprimento, { quantity: 0, meters: metros }, produto!.name) : null;
       const u = await tx.stockItem.update({
         where: { id: s.id },
-        data: { quantity: s.quantity.minus(mov.quantity) },
+        data: emb ? { quantity: D(emb.estado.pecas), remnant: D(emb.estado.sobraM) } : { quantity: s.quantity.minus(mov.quantity) },
       });
       await enqueueStock(tx, companyId, u.id);
     }
     if (mov.fromWarehouseId) {
       const s = await getOrCreateStock(tx, mov.productId, mov.fromWarehouseId);
+      const emb = comprimento && metros ? aplicarEmbalagem('ENTRADA', s, comprimento, { quantity: 0, meters: metros }, produto!.name) : null;
       const u = await tx.stockItem.update({
         where: { id: s.id },
-        data: { quantity: s.quantity.plus(mov.quantity) },
+        data: emb ? { quantity: D(emb.estado.pecas), remnant: D(emb.estado.sobraM) } : { quantity: s.quantity.plus(mov.quantity) },
       });
       await enqueueStock(tx, companyId, u.id);
     }
@@ -377,6 +477,7 @@ export async function estornar(companyId: string, movementId: string, userId: st
         type: 'ESTORNO',
         productId: mov.productId,
         quantity: mov.quantity,
+        meters: mov.meters,
         unitCost: mov.unitCost,
         fromWarehouseId: mov.toWarehouseId,
         toWarehouseId: mov.fromWarehouseId,
@@ -641,6 +742,10 @@ export async function posicao(params: {
     quantity: Number(r.quantity),
     reserved: Number(r.reserved),
     available: Number(r.quantity) - Number(r.reserved),
+    // Barra × metro: peças inteiras + sobra, sempre em m e cm.
+    embalagem: comprimentoDe(r.product)
+      ? resumoEmbalagem({ pecas: Number(r.quantity), sobraM: Number(r.remnant) }, comprimentoDe(r.product)!, r.product.packType!)
+      : null,
     minStock: Number(r.product.minStock),
     avgCost: Number(r.avgCost),
     salePrice: Number(r.product.salePrice),

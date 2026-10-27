@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { BookOpen, Package, Plus, Search, Upload } from 'lucide-react';
+import { BookOpen, Package, Plus, Ruler, Search, Upload } from 'lucide-react';
 import { api, ApiError, type Product } from '../lib/api';
 import { Badge, brl, Card, Empty, Field, Input, Modal, qty, Select, Spinner, Table, useToast } from '../lib/ui';
 import { useAuth } from '../App';
@@ -12,6 +12,8 @@ export default function Produtos() {
   const [modal, setModal] = useState<'novo' | 'lote' | null>(null);
   const [editing, setEditing] = useState<Product | null>(null);
   const [carregandoTabelas, setCarregandoTabelas] = useState(false);
+  const [aplicandoEmbalagens, setAplicandoEmbalagens] = useState(false);
+  const [tipoEmbalagem, setTipoEmbalagem] = useState<string>('');
   const toast = useToast();
   const { pode } = useAuth();
   const podeCarregarTabelas = pode('GERENCIAR_CADASTROS');
@@ -22,6 +24,23 @@ export default function Produtos() {
    * encomenda, com preço parcelado e à vista. Pode rodar quantas vezes quiser:
    * atualiza o que já existe e não mexe em estoque.
    */
+  /**
+   * Barra × metro: aplica as famílias padrão (tubo de cobre 5 m, aquatherm
+   * 3 m, marrom 6 m, condulete 3 m, PPR 3 m, Elumaflex rolo 2 m) nos tubos
+   * que ainda não têm embalagem. Não sobrescreve o que já foi cadastrado.
+   */
+  const aplicarEmbalagensPadrao = async () => {
+    setAplicandoEmbalagens(true);
+    try {
+      const r = await api.post<{ total: number; aplicados: Record<string, number> }>('/products/aplicar-embalagens-padrao');
+      const detalhe = Object.entries(r.aplicados).map(([f, n]) => `${f}: ${n}`).join(' · ');
+      toast({ kind: 'ok', title: r.total ? `${r.total} produto(s) com embalagem definida` : 'Nenhum produto novo para aplicar', body: detalhe || 'Tubos já cadastrados como barra/rolo não foram tocados.' });
+      void load(search);
+    } catch (err) {
+      toast({ kind: 'err', title: 'Não foi possível aplicar', body: err instanceof ApiError ? err.message : undefined });
+    } finally { setAplicandoEmbalagens(false); }
+  };
+
   const carregarTabelasFornecedores = async () => {
     setCarregandoTabelas(true);
     try {
@@ -61,6 +80,9 @@ export default function Produtos() {
     // Campos opcionais de tabela: vazio vira nulo (não zero); checkbox vira booleano.
     f.cashPrice = String(fd.get('cashPrice') ?? '').trim() === '' ? null : Number(fd.get('cashPrice'));
     f.onDemand = fd.get('onDemand') === 'on';
+    // Barra × metro: sem tipo, limpa o comprimento também.
+    f.packType = String(fd.get('packType') ?? '') || null;
+    f.packLength = f.packType && String(fd.get('packLength') ?? '').trim() !== '' ? Number(fd.get('packLength')) : null;
     for (const k of ['installmentTerms', 'priceTable', 'supplierCode']) if (!String(f[k] ?? '').trim()) f[k] = null;
     try {
       if (editing) await api.patch(`/products/${editing.id}`, f);
@@ -103,6 +125,11 @@ export default function Produtos() {
         </div>
         <div className="flex flex-wrap gap-2">
           {podeCarregarTabelas && (
+            <button onClick={() => void aplicarEmbalagensPadrao()} disabled={aplicandoEmbalagens} className="btn-ghost btn-sm gap-2" title="Tubo de cobre 5 m, aquatherm 3 m, marrom 6 m, condulete 3 m, PPR 3 m, Elumaflex rolo 2 m — só nos tubos ainda sem embalagem">
+              <Ruler size={15} /> {aplicandoEmbalagens ? 'Aplicando…' : 'Aplicar barras padrão'}
+            </button>
+          )}
+          {podeCarregarTabelas && (
             <button onClick={() => void carregarTabelasFornecedores()} disabled={carregandoTabelas} className="btn-ghost btn-sm gap-2" title="SOLIS, SYLLENT, INOVA, THOLZ (e SODRAMAR 2015/2016, desatualizada): cria ou atualiza os produtos com preço parcelado e à vista">
               <BookOpen size={15} /> {carregandoTabelas ? 'Carregando…' : 'Carregar tabelas de fornecedores'}
             </button>
@@ -110,7 +137,7 @@ export default function Produtos() {
           <button onClick={() => setModal('lote')} className="btn-ghost btn-sm gap-2">
             <Upload size={15} /> Importar lista
           </button>
-          <button id="btn-novo-produto" onClick={() => { setEditing(null); setModal('novo'); }} className="btn-primary btn-sm gap-2">
+          <button id="btn-novo-produto" onClick={() => { setEditing(null); setTipoEmbalagem(''); setModal('novo'); }} className="btn-primary btn-sm gap-2">
             <Plus size={16} /> Novo produto
           </button>
         </div>
@@ -137,7 +164,7 @@ export default function Produtos() {
             empty={<Empty icon={<Package size={24} />} title="Nenhum produto cadastrado" body="Cadastre o primeiro produto para começar a movimentar o estoque." action={<button onClick={() => setModal('novo')} className="btn-primary btn-sm mt-2 gap-2"><Plus size={15} /> Cadastrar produto</button>} />}
             columns={[
               { key: 'n', header: 'Produto', render: (p) => (
-                <button onClick={() => { setEditing(p); setModal('novo'); }} className="text-left">
+                <button onClick={() => { setEditing(p); setTipoEmbalagem(p.packType ?? ''); setModal('novo'); }} className="text-left">
                   <p className="font-medium text-ink hover:text-brand">{p.name}</p>
                   <p className="font-mono text-[11.5px] text-faint">{p.sku}{p.barcode ? ` · ${p.barcode}` : ''}</p>
                 </button>
@@ -145,8 +172,11 @@ export default function Produtos() {
               { key: 'c', header: 'Categoria', render: (p) => p.category ? <Badge>{p.category.name}</Badge> : <span className="text-faint">—</span> },
               { key: 's', header: 'Estoque total', align: 'right', render: (p) => (
                 <div>
-                  <span className={(p.totalStock ?? 0) < p.minStock ? 'font-semibold text-danger' : ''}>{qty(p.totalStock ?? 0)}</span>
+                  <span className={(p.totalStock ?? 0) < p.minStock * 0.5 ? 'font-semibold text-danger' : ''}>{p.embalagem ? p.embalagem.pecasContadas : qty(p.totalStock ?? 0)}</span>
                   <span className="ml-1 text-[11.5px] text-faint">{p.unit}</span>
+                  {p.embalagem && (
+                    <p className="text-[11px] text-faint tnum">{p.embalagem.pecasInteiras} inteira(s){p.embalagem.sobraM > 0 ? ` + ${p.embalagem.sobra}` : ''} · {p.embalagem.total}</p>
+                  )}
                 </div>
               ) },
               { key: 'd', header: 'Por depósito', render: (p) => (
@@ -193,6 +223,16 @@ export default function Produtos() {
             </Field>
             <Field label="Medida"><Input name="measureUnit" defaultValue={(editing as any)?.measureUnit ?? ''} placeholder="m" /></Field>
           </div>
+          <Field label="Embalagem (barra × metro)" hint="Para tubos e rolos vendidos também em metros">
+            <Select name="packType" value={tipoEmbalagem} onChange={(e) => setTipoEmbalagem(e.target.value)}>
+              <option value="">Não se aplica (contado por unidade)</option>
+              <option value="BARRA">Barra</option>
+              <option value="ROLO">Rolo</option>
+            </Select>
+          </Field>
+          <Field label="Comprimento da peça (m)" hint="Cobre 5 · aquatherm/condulete/PPR 3 · marrom 6 · Elumaflex 2">
+            <Input name="packLength" type="number" step="0.001" min="0.001" disabled={!tipoEmbalagem} required={!!tipoEmbalagem} defaultValue={editing?.packLength ?? ''} placeholder="5" />
+          </Field>
           <Field label="Código interno (opcional)" hint="Em branco, o sistema gera">
             <Input name="sku" defaultValue={editing?.sku} placeholder="gerado automaticamente" />
           </Field>
