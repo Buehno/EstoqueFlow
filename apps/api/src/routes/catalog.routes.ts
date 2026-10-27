@@ -6,20 +6,16 @@ import { conflict, notFound } from '../lib/errors.js';
 import { enqueueProduct } from '../services/sync.service.js';
 import { TABELAS_FORNECEDORES } from '../assets/tabelas-fornecedores.js';
 import { FAMILIAS_PADRAO, resumo as resumoEmbalagem } from '../services/embalagem.js';
+import { gerarIdsUnicos, proximoIdUnico } from '../services/master-data.service.js';
 
 /**
  * O estoque desta operação não tem etiqueta nem código impresso: o produto é
  * achado pela descrição. O SKU continua existindo como código interno, mas é
- * OPCIONAL — quando não vem preenchido, o sistema gera um sequencial.
+ * OPCIONAL — quando não vem preenchido, o sistema gera o ID único no formato
+ * master data (PREFIXO-DA-CATEGORIA + sequencial, ex.: TUB-00012).
  */
-async function gerarSku(companyId: string): Promise<string> {
-  const total = await prisma.product.count({ where: { companyId } });
-  for (let i = total + 1; i < total + 5000; i++) {
-    const candidato = `P-${String(i).padStart(5, '0')}`;
-    const existe = await prisma.product.findFirst({ where: { companyId, sku: candidato } });
-    if (!existe) return candidato;
-  }
-  return `P-${Date.now()}`;
+async function gerarSku(companyId: string, categoryId: string | null): Promise<string> {
+  return prisma.$transaction((tx) => proximoIdUnico(tx, companyId, categoryId));
 }
 
 /** Minúsculo e sem acento — "Abraçadeira 3/4" vira "abracadeira 3/4". */
@@ -159,6 +155,27 @@ export default async function catalogRoutes(app: FastifyInstance) {
     return prisma.category.create({ data: { ...body, companyId: req.user!.companyId } });
   });
 
+  /** Edita nome, cor e o prefixo do ID único (3 letras, único na empresa). */
+  app.patch('/categories/:id', { preHandler: requireCap('GERENCIAR_CADASTROS') }, async (req) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const body = z
+      .object({
+        name: z.string().min(1).optional(),
+        color: z.string().optional(),
+        codePrefix: z.string().regex(/^[A-Za-z]{3}$/, 'O prefixo tem exatamente 3 letras').transform((v) => v.toUpperCase()).optional(),
+      })
+      .parse(req.body);
+    const companyId = req.user!.companyId;
+    const atual = await prisma.category.findFirst({ where: { id, companyId } });
+    if (!atual) throw notFound('Categoria não encontrada.');
+    if (body.codePrefix) {
+      const ocupado = await prisma.category.findFirst({ where: { companyId, codePrefix: body.codePrefix, id: { not: id } } });
+      if (ocupado) throw conflict(`O prefixo ${body.codePrefix} já é usado pela categoria "${ocupado.name}".`);
+      if (body.codePrefix === 'GER' && normalizar(atual.name) !== 'geral') throw conflict('GER é reservado para produtos sem categoria (e para a categoria "Geral").');
+    }
+    return prisma.category.update({ where: { id }, data: body });
+  });
+
   // ─────────────────────── FORNECEDORES ───────────────────────
   app.get('/suppliers', async (req) =>
     prisma.supplier.findMany({
@@ -263,6 +280,15 @@ export default async function catalogRoutes(app: FastifyInstance) {
   });
 
   /**
+   * ID único / master data: gera PREFIXO-DA-CATEGORIA + sequencial para todo
+   * produto que ainda não tem um ID nesse formato. O código anterior fica em
+   * `legacySku` e continua achável na busca. Idempotente.
+   */
+  app.post('/products/gerar-ids-unicos', { preHandler: requireCap('GERENCIAR_CADASTROS') }, async (req) =>
+    gerarIdsUnicos(req.user!.companyId, montarSearchText),
+  );
+
+  /**
    * Barra × metro — aplica as famílias padrão (tubo de cobre 5 m, aquatherm
    * 3 m, marrom 6 m, condulete 3 m, PPR 3 m, Elumaflex rolo 2 m) nos
    * produtos cujo nome bate com a família e que ainda não têm embalagem
@@ -334,7 +360,8 @@ export default async function catalogRoutes(app: FastifyInstance) {
         supplierId: fornecedores.get(t.fornecedor)!,
         active: true,
       };
-      const existente = await prisma.product.findFirst({ where: { companyId, sku: t.sku } });
+      // Depois de "Gerar IDs únicos" o SKU da tabela vira legacySku — acha pelos dois.
+      const existente = await prisma.product.findFirst({ where: { companyId, OR: [{ sku: t.sku }, { legacySku: t.sku }] } });
       const searchText = montarSearchText({ ...campos, sku: t.sku, description: `${t.descricao ?? ''} ${t.fornecedor} ${t.codigoFornecedor ?? ''}` });
       if (existente) {
         await prisma.product.update({ where: { id: existente.id }, data: { ...campos, searchText } });
@@ -374,7 +401,7 @@ export default async function catalogRoutes(app: FastifyInstance) {
     // Leitura de código de barras / código interno exato entra na frente.
     const exato = termo
       ? await prisma.product.findFirst({
-          where: { companyId, active: true, OR: [{ barcode: termo }, { sku: termo }] },
+          where: { companyId, active: true, OR: [{ barcode: termo }, { sku: termo }, { legacySku: termo }] },
           include: { category: true, supplier: true, stockItems: { include: { warehouse: true } } },
         })
       : null;
@@ -425,6 +452,7 @@ export default async function catalogRoutes(app: FastifyInstance) {
         supplierCode: p.supplierCode,
         supplier: p.supplier?.name ?? null,
         onDemand: p.onDemand,
+        legacySku: p.legacySku,
         packType: p.packType,
         packLength: p.packLength == null ? null : Number(p.packLength),
         // Barra × metro: peças inteiras + sobra, em m e cm, somando os depósitos.
@@ -498,7 +526,7 @@ export default async function catalogRoutes(app: FastifyInstance) {
       .parse(req.body);
 
     const companyId = req.user!.companyId;
-    const sku = body.sku?.trim() || (await gerarSku(companyId));
+    const sku = body.sku?.trim() || (await gerarSku(companyId, body.categoryId || null));
 
     const dup = await prisma.product.findFirst({ where: { companyId, sku } });
     if (dup) throw conflict(`Já existe um produto com o código interno ${sku}.`);

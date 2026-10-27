@@ -80,6 +80,8 @@ export interface Warehouse {
 }
 export interface Product {
   id: string; sku: string; barcode: string | null; name: string; unit: string;
+  /** Código anterior ao ID único (master data). */
+  legacySku?: string | null;
   size?: string | null; measure?: number | null; measureUnit?: string | null;
   costPrice: number; salePrice: number; minStock: number; active: boolean;
   /** Preço à vista da tabela do fornecedor (nulo = só existe o preço de venda). */

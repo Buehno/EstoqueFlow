@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { BookOpen, Package, Plus, Ruler, Search, Upload } from 'lucide-react';
+import { BookOpen, Fingerprint, Package, Plus, Ruler, Search, Upload } from 'lucide-react';
 import { api, ApiError, type Product } from '../lib/api';
 import { Badge, brl, Card, Empty, Field, Input, Modal, qty, Select, Spinner, Table, useToast } from '../lib/ui';
 import { useAuth } from '../App';
@@ -13,6 +13,7 @@ export default function Produtos() {
   const [editing, setEditing] = useState<Product | null>(null);
   const [carregandoTabelas, setCarregandoTabelas] = useState(false);
   const [aplicandoEmbalagens, setAplicandoEmbalagens] = useState(false);
+  const [gerandoIds, setGerandoIds] = useState(false);
   const [tipoEmbalagem, setTipoEmbalagem] = useState<string>('');
   const toast = useToast();
   const { pode } = useAuth();
@@ -24,6 +25,24 @@ export default function Produtos() {
    * encomenda, com preço parcelado e à vista. Pode rodar quantas vezes quiser:
    * atualiza o que já existe e não mexe em estoque.
    */
+  /**
+   * ID único / master data: PREFIXO-DA-CATEGORIA + sequencial (TUB-00012)
+   * para todo produto que ainda não tem; o código antigo fica guardado e
+   * continua achável na busca. Pode rodar quantas vezes quiser.
+   */
+  const gerarIdsUnicos = async () => {
+    if (!window.confirm('Gerar ID único para todos os produtos que ainda não têm? O código atual fica guardado como "código antigo" e continua funcionando na busca.')) return;
+    setGerandoIds(true);
+    try {
+      const r = await api.post<{ gerados: number; mantidos: number; total: number; porPrefixo: Record<string, number> }>('/products/gerar-ids-unicos');
+      const detalhe = Object.entries(r.porPrefixo).map(([p, n]) => `${p}: ${n}`).join(' · ');
+      toast({ kind: 'ok', title: `${r.gerados} ID(s) gerado(s), ${r.mantidos} já tinham`, body: detalhe || undefined });
+      void load(search);
+    } catch (err) {
+      toast({ kind: 'err', title: 'Não foi possível gerar os IDs', body: err instanceof ApiError ? err.message : undefined });
+    } finally { setGerandoIds(false); }
+  };
+
   /**
    * Barra × metro: aplica as famílias padrão (tubo de cobre 5 m, aquatherm
    * 3 m, marrom 6 m, condulete 3 m, PPR 3 m, Elumaflex rolo 2 m) nos tubos
@@ -125,6 +144,11 @@ export default function Produtos() {
         </div>
         <div className="flex flex-wrap gap-2">
           {podeCarregarTabelas && (
+            <button onClick={() => void gerarIdsUnicos()} disabled={gerandoIds} className="btn-ghost btn-sm gap-2" title="Prefixo da categoria + sequencial (TUB-00012) para quem ainda não tem; o código antigo fica guardado">
+              <Fingerprint size={15} /> {gerandoIds ? 'Gerando…' : 'Gerar IDs únicos'}
+            </button>
+          )}
+          {podeCarregarTabelas && (
             <button onClick={() => void aplicarEmbalagensPadrao()} disabled={aplicandoEmbalagens} className="btn-ghost btn-sm gap-2" title="Tubo de cobre 5 m, aquatherm 3 m, marrom 6 m, condulete 3 m, PPR 3 m, Elumaflex rolo 2 m — só nos tubos ainda sem embalagem">
               <Ruler size={15} /> {aplicandoEmbalagens ? 'Aplicando…' : 'Aplicar barras padrão'}
             </button>
@@ -166,7 +190,7 @@ export default function Produtos() {
               { key: 'n', header: 'Produto', render: (p) => (
                 <button onClick={() => { setEditing(p); setTipoEmbalagem(p.packType ?? ''); setModal('novo'); }} className="text-left">
                   <p className="font-medium text-ink hover:text-brand">{p.name}</p>
-                  <p className="font-mono text-[11.5px] text-faint">{p.sku}{p.barcode ? ` · ${p.barcode}` : ''}</p>
+                  <p className="font-mono text-[11.5px] text-faint">{p.sku}{p.legacySku ? ` · antes ${p.legacySku}` : ''}{p.barcode ? ` · ${p.barcode}` : ''}</p>
                 </button>
               ) },
               { key: 'c', header: 'Categoria', render: (p) => p.category ? <Badge>{p.category.name}</Badge> : <span className="text-faint">—</span> },

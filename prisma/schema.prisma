@@ -201,6 +201,9 @@ model Category {
   companyId String   @map("company_id") @db.Uuid
   name      String
   color     String?  @default("#64748b")
+  /// Prefixo de 3 letras do ID único dos produtos desta categoria (TUB-00012).
+  /// Derivado do nome na primeira vez, único por empresa; pode ser editado.
+  codePrefix String? @map("code_prefix")
   createdAt DateTime @default(now()) @map("created_at")
 
   company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
@@ -253,8 +256,12 @@ model Customer {
 model Product {
   id          String  @id @default(uuid()) @db.Uuid
   companyId   String  @map("company_id") @db.Uuid
-  /// Código interno. Gerado pelo sistema se não vier preenchido.
+  /// Código interno / ID único (master data): PREFIXO-DA-CATEGORIA + sequencial
+  /// (TUB-00012). Gerado pelo sistema se não vier preenchido.
   sku         String
+  /// Código que o produto tinha antes de ganhar o ID único (JQ-xxxxx, P-xxxxx,
+  /// código da tabela do fornecedor…). Continua achável na busca.
+  legacySku   String? @map("legacy_sku")
   /// Código de barras — opcional, só serve de atalho no leitor.
   barcode     String?
   name        String
