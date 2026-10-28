@@ -39,7 +39,7 @@ export default function Dashboard() {
         <Stat
           label="Alerta de compra"
           value={int(d.alertas.alertaCompra)}
-          sub="total ≤ 50% do estoque aceitável"
+          sub="total ≤ 50% do estoque sugerido"
           tone={d.alertas.alertaCompra ? 'danger' : 'ok'}
           icon={<AlertTriangle size={18} />}
         />
@@ -112,13 +112,13 @@ export default function Dashboard() {
       <div className="grid gap-6 xl:grid-cols-2">
         <Card
           title="Reposição"
-          subtitle="Pelo total dos dois depósitos — metade do estoque aceitável dispara a compra"
+          subtitle="Pelo total dos dois depósitos — metade do estoque sugerido dispara a compra"
           action={<Link to="/app/relatorios" className="btn-ghost btn-sm">Ver relatório</Link>}
         >
           <Table
             rows={d.alertas.lista.slice(0, 8)}
             keyOf={(r) => r.productId}
-            empty={<Empty icon={<TrendingUp size={24} />} title="Nenhum item pedindo reposição" body="Todo produto com estoque aceitável definido está acima da metade dele." />}
+            empty={<Empty icon={<TrendingUp size={24} />} title="Nenhum item pedindo reposição" body="Todo produto com estoque sugerido definido está acima da metade dele." />}
             columns={[
               { key: 's', header: '', render: (r) => (
                 <Badge tone="danger">
@@ -142,7 +142,7 @@ export default function Dashboard() {
           />
           {d.alertas.semMinimo > 0 && (
             <p className="mt-3 text-[12.5px] text-faint">
-              {d.alertas.semMinimo} produto(s) ainda sem estoque aceitável definido — ficam fora do alerta até alguém definir a régua.
+              {d.alertas.semMinimo} produto(s) ainda sem estoque sugerido definido — ficam fora do alerta até alguém definir a régua.
             </p>
           )}
         </Card>

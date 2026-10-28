@@ -161,7 +161,7 @@ export default function Depositos() {
             ) : (
               <span className={r.belowMin ? 'font-semibold text-danger' : ''}>{qty(r.quantity)} <span className="text-[11.5px] text-faint">{r.unit}</span></span>
             ) },
-            { key: 'm', header: 'Aceitável', align: 'right', render: (r) => qty(r.minStock) },
+            { key: 'm', header: 'Sugerido', align: 'right', render: (r) => qty(r.minStock) },
             { key: 'c', header: 'Custo médio', align: 'right', render: (r) => brl(r.avgCost) },
             { key: 'v', header: 'Valor', align: 'right', render: (r) => <b>{brl(r.stockValue)}</b> },
             { key: 'a', header: '', align: 'right', render: (r) => (

@@ -232,7 +232,7 @@ const requireCjs = createRequire(import.meta.url);
  * carregado via createRequire — assim o runtime pega o objeto real e o TypeScript
  * mantém a tipagem de @types/pdfmake.
  */
-const pdfMake = requireCjs('pdfmake') as typeof import('pdfmake');
+export const pdfMake = requireCjs('pdfmake') as typeof import('pdfmake');
 
 let fontesRegistradas = false;
 
@@ -269,7 +269,7 @@ function diretorioRoboto(): string {
 }
 
 /** Registra o Roboto embutido no pdfmake e tranca os acessos externos. */
-function registrarFontes(): void {
+export function registrarFontes(): void {
   if (fontesRegistradas) return;
 
   const dirRoboto = diretorioRoboto();

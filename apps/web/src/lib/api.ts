@@ -127,16 +127,21 @@ export interface LinhaCompra {
   depositos: { id: string; code: string; name: string; quantity: number }[];
   total: number; minStock: number; pontoCompra: number;
   situacao: SituacaoCompra; comprarParaRepor: number;
+  /** Fração do sugerido que ainda resta (0 = zerado, 0,5 = gatilho). */
+  fracaoRestante: number | null;
+  urgencia: 'ZERADO' | 'CRITICO' | 'ALERTA' | null;
   custoMedio: number; valorEstoque: number; saidas90: number; coberturaDias: number | null;
 }
 export interface PosicaoCompra {
   depositos: { id: string; code: string; name: string }[];
   itens: LinhaCompra[];
   resumo: {
-    produtos: number; alertaCompra: number; ok: number; semMinimo: number;
-    valorAComprar: number; valorEstoque: number;
+    produtos: number; alertaCompra: number; zerados: number; criticos: number; fornecedoresEnvolvidos: number;
+    ok: number; semMinimo: number; valorAComprar: number; valorEstoque: number;
   };
   alerta: LinhaCompra[]; semMinimo: LinhaCompra[];
+  porCategoria: { categoria: string; produtos: number; alerta: number; total: number; valor: number; comprar: number }[];
+  porFornecedor: { fornecedor: string; itensParaComprar: number; valor: number; zerados: number }[];
 }
 export interface SaldoQuebrado {
   productId: string; sku: string; name: string; unit: string;

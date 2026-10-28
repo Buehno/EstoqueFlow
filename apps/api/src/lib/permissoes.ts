@@ -40,8 +40,8 @@ export const ROTULO_CAPACIDADE: Record<Capacidade, { titulo: string; descricao: 
   GERENCIAR_INVENTARIO: { titulo: 'Inventário', descricao: 'Abrir contagens, apurar e aplicar diferenças' },
   VER_RELATORIO_RESUMIDO: { titulo: 'Relatório resumido', descricao: 'Painel com números agregados, sem custo nem margem' },
   VER_RELATORIO_COMPLETO: { titulo: 'Relatório completo', descricao: 'Relatórios detalhados: custo, margem, exportações, limpeza da base' },
-  VER_ALERTAS: { titulo: 'Ver alertas de compra', descricao: 'Lista de reposição (itens em 50% do estoque aceitável)' },
-  GERENCIAR_REGRAS_ALERTA: { titulo: 'Regras de alerta', descricao: 'Estoque aceitável dos produtos, estornos, correções e e-mail diário' },
+  VER_ALERTAS: { titulo: 'Ver alertas de compra', descricao: 'Lista de reposição (itens em 50% do estoque sugerido)' },
+  GERENCIAR_REGRAS_ALERTA: { titulo: 'Regras de alerta', descricao: 'Estoque sugerido dos produtos, estornos, correções e e-mail diário' },
   GERENCIAR_EQUIPE: { titulo: 'Equipe', descricao: 'Adicionar, editar, excluir pessoas e ligar/desligar permissões' },
 };
 

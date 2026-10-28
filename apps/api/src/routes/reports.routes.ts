@@ -1,10 +1,10 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { authenticate, requireRole, requireCap, CAN_MANAGE } from '../lib/auth.js';
 import { curvaABC, dashboard, giroEstoque, kardex, vendasPorDia } from '../services/reports.service.js';
 import { duplicados, posicaoCompra, radiografiaFracionados, saldosQuebrados } from '../services/compras.service.js';
-import { gerarRelatorioCompras } from '../services/compras-export.service.js';
+import { gerarCsvCompras, gerarPdfCompras, gerarRelatorioCompras } from '../services/compras-export.service.js';
 import { arredondarSaldosQuebrados, desativarProdutoDuplicado } from '../services/stock.service.js';
 import { fullResync, runGuard, runSync, sheetsEnabled } from '../services/sync.service.js';
 import { env } from '../env.js';
@@ -18,19 +18,41 @@ export default async function reportsRoutes(app: FastifyInstance) {
   /** Posição de compra pelo TOTAL dos dois depósitos, já classificada. */
   app.get('/reports/compras', { preHandler: requireCap('VER_ALERTAS', 'VER_RELATORIO_COMPLETO') }, async (req) => posicaoCompra(req.user!.companyId));
 
-  /** A lista de reposição em planilha: só o que atingiu o ponto de compra. */
-  app.get('/reports/compras/planilha', { preHandler: requireCap('VER_ALERTAS', 'VER_RELATORIO_COMPLETO') }, async (req, reply) => {
+  /**
+   * Extrair o relatório de compras (27/10). `formato` = xlsx (pasta completa:
+   * resumo, lista, por fornecedor, por categoria, todos, sem sugerido) | pdf
+   * (lista para imprimir/WhatsApp) | csv. `fornecedor` restringe à lista de
+   * um fornecedor — vira o pedido daquele fornecedor.
+   */
+  const extrairCompras = async (req: FastifyRequest, reply: FastifyReply, formatoFixo?: 'xlsx' | 'pdf' | 'csv') => {
+    const q = z.object({ formato: z.enum(['xlsx', 'pdf', 'csv']).optional(), fornecedor: z.string().max(200).optional() }).parse(req.query);
+    const formato = formatoFixo ?? q.formato ?? 'xlsx';
     const companyId = req.user!.companyId;
     const [posicao, empresa] = await Promise.all([
       posicaoCompra(companyId),
       prisma.company.findUnique({ where: { id: companyId }, select: { name: true } }),
     ]);
-    const buffer = await gerarRelatorioCompras(posicao, empresa?.name ?? 'EstoqueFlow');
+    const nome = empresa?.name ?? 'EstoqueFlow';
     const hoje = new Date().toISOString().slice(0, 10);
+    const sufixo = q.fornecedor ? `-${q.fornecedor.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z0-9]+/g, '-').toLowerCase()}` : '';
+    const base = q.fornecedor ? `pedido-de-compra${sufixo}-${hoje}` : `relatorio-de-compras-${hoje}`;
+    if (formato === 'pdf') {
+      reply.header('Content-Type', 'application/pdf');
+      reply.header('Content-Disposition', `attachment; filename="${base}.pdf"`);
+      return reply.send(await gerarPdfCompras(posicao, nome, q.fornecedor));
+    }
+    if (formato === 'csv') {
+      reply.header('Content-Type', 'text/csv; charset=utf-8');
+      reply.header('Content-Disposition', `attachment; filename="${base}.csv"`);
+      return reply.send(gerarCsvCompras(posicao, q.fornecedor));
+    }
     reply.header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    reply.header('Content-Disposition', `attachment; filename="lista-de-reposicao-${hoje}.xlsx"`);
-    return reply.send(buffer);
-  });
+    reply.header('Content-Disposition', `attachment; filename="${base}.xlsx"`);
+    return reply.send(await gerarRelatorioCompras(posicao, nome, q.fornecedor));
+  };
+  app.get('/reports/compras/extrair', { preHandler: requireCap('VER_ALERTAS', 'VER_RELATORIO_COMPLETO') }, (req, reply) => extrairCompras(req, reply));
+  /** Compatibilidade: o botão antigo continua baixando a planilha. */
+  app.get('/reports/compras/planilha', { preHandler: requireCap('VER_ALERTAS', 'VER_RELATORIO_COMPLETO') }, (req, reply) => extrairCompras(req, reply, 'xlsx'));
 
   // ═══════════════ LIMPEZA DA BASE (pedido de 24/09) ═══════════════════════
   /** Saldos quebrados em item vendido por unidade. */

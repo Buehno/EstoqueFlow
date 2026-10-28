@@ -56,7 +56,7 @@ export async function dashboard(companyId: string) {
 
   /**
    * Alerta: o que decide é o TOTAL somado dos depósitos, não o saldo de cada
-   * um. `minStock` é o estoque ACEITÁVEL e metade dele é o único gatilho de
+   * um. `minStock` é o estoque SUGERIDO e metade dele é o único gatilho de
    * compra (regra do Ronaldo, 27/10 — sem estado de "atenção").
    * A lista detalhada, com todas as visões, está em `/reports/compras`.
    */
@@ -104,9 +104,9 @@ export async function dashboard(companyId: string) {
     produtosAtivos,
     depositos: porDeposito,
     alertas: {
-      /** Quantos disparam compra agora (total <= 50% do aceitável). */
+      /** Quantos disparam compra agora (total <= 50% do sugerido). */
       alertaCompra: alertaCompra.length,
-      /** Produtos ainda sem estoque aceitável definido — ficam fora do alerta. */
+      /** Produtos ainda sem estoque sugerido definido — ficam fora do alerta. */
       semMinimo,
       /** Compatibilidade: mesmo número de alertaCompra (o estado "atenção" não existe mais). */
       abaixoMinimo: classificados.length,

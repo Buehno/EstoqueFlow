@@ -140,7 +140,9 @@ async function main() {
   writeFileSync('/tmp/reposicao.xlsx', buf);
 
   const nomesAbas = execSync('cd /tmp && python3 -c "import openpyxl,json;print(json.dumps(openpyxl.load_workbook(\'/tmp/reposicao.xlsx\').sheetnames))"').toString();
-  check('a planilha tem uma aba só, "Repor agora"', JSON.parse(nomesAbas).length === 1 && JSON.parse(nomesAbas)[0] === 'Repor agora', nomesAbas);
+  // 28/10: a planilha virou o relatório completo (6 abas); a lista do que
+  // comprar agora é a aba "Lista de compra".
+  check('a planilha traz a aba "Lista de compra" (relatório completo de 28/10)', JSON.parse(nomesAbas).includes('Lista de compra') && JSON.parse(nomesAbas)[0] === 'Resumo', nomesAbas);
 
   console.log(`\n${passou} passaram, ${falhou} falharam`);
   if (falhou > 0) process.exit(1);

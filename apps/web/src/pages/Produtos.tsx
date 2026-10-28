@@ -285,7 +285,7 @@ export default function Produtos() {
             <input type="checkbox" name="onDemand" defaultChecked={editing?.onDemand ?? false} className="h-4 w-4" />
             <span><b>Vendido sob encomenda</b> — entra na proposta mesmo sem saldo em estoque (itens de tabela de fornecedor).</span>
           </label>
-          <Field label="Estoque aceitável" hint="Quantidade que deve haver; em 50% dela dispara a compra">
+          <Field label="Estoque sugerido" hint="Quantidade que deve haver; em 50% dela dispara a compra">
             <Input name="minStock" type="number" step="0.001" min="0" defaultValue={editing?.minStock ?? 0} />
           </Field>
           <div className="flex items-end justify-end gap-2 sm:col-span-2">

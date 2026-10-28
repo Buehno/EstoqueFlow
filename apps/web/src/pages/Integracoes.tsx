@@ -202,7 +202,7 @@ export default function Integracoes() {
 
       <Card
         title="Alerta diário por e-mail"
-        subtitle="Todo dia, no horário escolhido, a gestora recebe os itens que chegaram a 50% do estoque aceitável e quanto comprar"
+        subtitle="Todo dia, no horário escolhido, a gestora recebe os itens que chegaram a 50% do estoque sugerido e quanto comprar"
       >
         {!empresa ? <Spinner /> : (
           <form onSubmit={salvarAlerta} className="space-y-4">

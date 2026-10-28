@@ -3,7 +3,7 @@
  *
  * Todo dia, no horário configurado (padrão 8h, horário de Brasília), a
  * gestora recebe um resumo com os itens em ALERTA DE COMPRA (total somado dos
- * depósitos ≤ 50% do estoque aceitável) e quanto comprar para voltar ao
+ * depósitos ≤ 50% do estoque sugerido) e quanto comprar para voltar ao
  * aceitável. Sem item em alerta, não manda nada (ninguém quer e-mail vazio).
  *
  * O remetente é configurável por empresa em Integrações (SMTP genérico:
@@ -79,16 +79,16 @@ export async function montarResumo(companyId: string) {
   const assunto = `[${empresa.name}] ${alerta.length} item(ns) em alerta de compra — ${dataBr}`;
 
   const linha = (i: LinhaCompra) =>
-    `${i.name}${i.size ? ` ${i.size}` : ''} — saldo ${NUM.format(i.total)} ${i.unit} (aceitável ${NUM.format(i.minStock)}) → comprar ${NUM.format(i.comprarParaRepor)} ${i.unit}` +
+    `${i.name}${i.size ? ` ${i.size}` : ''} — saldo ${NUM.format(i.total)} ${i.unit} (sugerido ${NUM.format(i.minStock)}) → comprar ${NUM.format(i.comprarParaRepor)} ${i.unit}` +
     (i.fornecedor ? ` · ${i.fornecedor}` : '');
 
   const texto = [
-    `Bom dia! Estes itens chegaram a 50% do estoque aceitável (total dos depósitos) e pedem compra:`,
+    `Bom dia! Estes itens chegaram a 50% do estoque sugerido (total dos depósitos) e pedem compra:`,
     '',
     ...alerta.map((i, n) => `${n + 1}. ${linha(i)}`),
     '',
     `Reposição estimada: ${BRL.format(compras.resumo.valorAComprar)}.`,
-    compras.resumo.semMinimo ? `${compras.resumo.semMinimo} produto(s) ainda sem estoque aceitável definido ficam fora deste alerta.` : '',
+    compras.resumo.semMinimo ? `${compras.resumo.semMinimo} produto(s) ainda sem estoque sugerido definido ficam fora deste alerta.` : '',
     '',
     `— EstoqueFlow · ${empresa.name}`,
   ].filter((l) => l !== undefined).join('\n');
@@ -104,7 +104,7 @@ export async function montarResumo(companyId: string) {
     </tr>`).join('');
   const html = `
   <div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#1a1a1a;max-width:720px">
-    <p>Bom dia! Estes itens chegaram a <b>50% do estoque aceitável</b> (total dos depósitos) e pedem compra:</p>
+    <p>Bom dia! Estes itens chegaram a <b>50% do estoque sugerido</b> (total dos depósitos) e pedem compra:</p>
     <table style="border-collapse:collapse;width:100%">
       <thead><tr style="background:#f3f3f3;font-size:12px;text-transform:uppercase;color:#555">
         <th style="padding:6px 8px;text-align:left">Produto</th><th style="padding:6px 8px;text-align:right">Saldo</th>
@@ -113,7 +113,7 @@ export async function montarResumo(companyId: string) {
       <tbody>${linhasHtml}</tbody>
     </table>
     <p style="margin-top:14px">Reposição estimada: <b>${BRL.format(compras.resumo.valorAComprar)}</b>.</p>
-    ${compras.resumo.semMinimo ? `<p style="color:#666;font-size:12px">${compras.resumo.semMinimo} produto(s) ainda sem estoque aceitável definido ficam fora deste alerta.</p>` : ''}
+    ${compras.resumo.semMinimo ? `<p style="color:#666;font-size:12px">${compras.resumo.semMinimo} produto(s) ainda sem estoque sugerido definido ficam fora deste alerta.</p>` : ''}
     <p style="color:#888;font-size:12px;margin-top:20px">— EstoqueFlow · ${esc(empresa.name)}</p>
   </div>`;
 

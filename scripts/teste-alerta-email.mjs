@@ -86,7 +86,7 @@ try {
   const previa = await req('GET', '/auth/company/alerta-email/previa', undefined, tk);
   check('prévia diz que não há nada', previa.data.itens === 0, previa.data);
 
-  // cria alerta: aceitável 100, saldo 40 (≤ 50%) → alerta; outro com 70 → não
+  // cria alerta: sugerido 100, saldo 40 (≤ 50%) → alerta; outro com 70 → não
   const p1 = (await req('POST', '/products', { name: 'Tubo marrom 25 mm', unit: 'UN', minStock: 100, costPrice: 12.5 }, tk)).data;
   const p2 = (await req('POST', '/products', { name: 'Cotovelo 25 mm', unit: 'UN', minStock: 100 }, tk)).data;
   await req('POST', '/movements/entrada', { productId: p1.id, warehouseId: wh[0].id, quantity: 25 }, tk);
@@ -95,7 +95,7 @@ try {
 
   const previa2 = await req('GET', '/auth/company/alerta-email/previa', undefined, tk);
   check('prévia lista 1 item (o de 40, não o de 70)', previa2.data.itens === 1 && /Tubo marrom/.test(previa2.data.texto) && !/Cotovelo/.test(previa2.data.texto), previa2.data);
-  check('prévia traz saldo, aceitável e quanto comprar (60) e o valor estimado (60 × 12,50 = 750)', /saldo 40/.test(previa2.data.texto) && /aceitável 100/.test(previa2.data.texto) && /comprar 60/.test(previa2.data.texto) && /750,00/.test(previa2.data.texto), previa2.data.texto);
+  check('prévia traz saldo, sugerido e quanto comprar (60) e o valor estimado (60 × 12,50 = 750)', /saldo 40/.test(previa2.data.texto) && /sugerido 100/.test(previa2.data.texto) && /comprar 60/.test(previa2.data.texto) && /750,00/.test(previa2.data.texto), previa2.data.texto);
 
   r = await req('POST', '/auth/company/alerta-email/enviar-agora', {}, tk);
   check('resumo enviado', r.data.enviado === true && r.data.itens === 1, r.data);
