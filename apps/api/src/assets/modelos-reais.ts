@@ -44,7 +44,7 @@ export const MODELOS_REAIS: ModeloReal[] = [
     paymentCash: "R$ 20.150,00 - para pagamento a vista.",
     deliveryTerms: null,
     closingNote: "Sem mais para o momento nos colocamos a inteira disposição.\nAntecipadamente gratos.\nAtenciosamente,",
-    footerNote: null,
+    footerNote: "NBR 9575 - Esta Norma estabelece as exigências e recomendações relativas à seleção e projeto de impermeabilização, para que sejam atendidos os requisitos mínimos de proteção da construção contra a passagem de fluidos, bem como os requisitos de salubridade, segurança e conforto do usuário, de forma a ser garantida a estanqueidade dos elementos construtivos que a requeiram.",
     items: [
       {
         quantity: 1,

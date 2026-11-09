@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft, Check, Copy, Download, FileSpreadsheet, FileText, FileType2, LayoutTemplate,
@@ -21,6 +21,13 @@ export default function PropostaEditor() {
   const [salvando, setSalvando] = useState(false);
   const [sujo, setSujo] = useState(false);
   const [modal, setModal] = useState<'status' | 'nota' | 'modelo' | null>(null);
+  /** Salvamento automático: 'ok' = tudo gravado, 'pendente' = esperando a pausa
+   *  de digitação, 'erro' = o servidor recusou (ex.: item sem saldo). */
+  const [auto, setAuto] = useState<{ estado: 'ok' | 'pendente' | 'salvando' | 'erro'; msg?: string; em?: Date }>({ estado: 'ok' });
+  /** Conta as alterações: se a pessoa digitar enquanto um salvamento está em
+   *  andamento, a proposta continua marcada como "suja" e salva de novo. */
+  const versao = useRef(0);
+  const emAndamento = useRef<Promise<boolean> | null>(null);
 
   const carregar = async () => {
     const d = await api.get<any>(`/proposals/${id}`);
@@ -53,12 +60,11 @@ export default function PropostaEditor() {
   const subtotal = useMemo(() => itens.reduce((a, i) => a + (i.total || 0), 0), [itens]);
   const total = Math.max(0, subtotal - (p?.discount ?? 0));
 
-  const mexer = (fn: (l: ItemProposta[]) => ItemProposta[]) => { setItens(fn); setSujo(true); };
-  const campo = (chave: string, valor: unknown) => { setP((a: any) => ({ ...a, [chave]: valor })); setSujo(true); };
+  const mexer = (fn: (l: ItemProposta[]) => ItemProposta[]) => { setItens(fn); setSujo(true); versao.current++; };
+  const campo = (chave: string, valor: unknown) => { setP((a: any) => ({ ...a, [chave]: valor })); setSujo(true); versao.current++; };
 
-  const salvar = async () => {
-    setSalvando(true);
-    try {
+  /** Grava itens + cabeçalho. Usado pelo botão e pelo salvamento automático. */
+  const gravar = async () => {
       await api.put(`/proposals/${id}/itens`, {
         items: itens.map((i) => ({
           quantity: i.quantity, quantityText: i.quantityText, description: i.description,
@@ -73,7 +79,55 @@ export default function PropostaEditor() {
         validityDays: p.validityDays, closingNote: p.closingNote, footerNote: p.footerNote,
         salesRep: p.salesRep, city: p.city, notes: p.notes,
       });
+  };
+
+  /** Salvamento automático: silencioso, sem recarregar a tela (não tira o
+   *  cursor do campo). Retorna true se gravou. */
+  const autoSalvar = useCallback(async (): Promise<boolean> => {
+    if (emAndamento.current) return emAndamento.current;
+    const v = versao.current;
+    setAuto({ estado: 'salvando' });
+    const tarefa = (async () => {
+      try {
+        await gravar();
+        if (versao.current === v) setSujo(false);
+        setAuto({ estado: 'ok', em: new Date() });
+        return true;
+      } catch (e) {
+        const err = e as ApiError;
+        const det = err.details?.length ? ` — ${(err.details as any[]).map((d) => d.produto ?? d.campo).join(', ')}` : '';
+        setAuto({ estado: 'erro', msg: `${err.message}${det}` });
+        return false;
+      } finally { emAndamento.current = null; }
+    })();
+    emAndamento.current = tarefa;
+    return tarefa;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [p, itens, id]);
+
+  // 2 s depois da última alteração, grava sozinho.
+  useEffect(() => {
+    if (!sujo || encerrada || !p) return;
+    setAuto((a) => (a.estado === 'salvando' ? a : { estado: 'pendente' }));
+    const t = setTimeout(() => { void autoSalvar(); }, 2000);
+    return () => clearTimeout(t);
+  }, [sujo, p, itens, encerrada, autoSalvar]);
+
+  // Fechar a aba ou recarregar com algo pendente: avisa o navegador.
+  useEffect(() => {
+    if (!sujo) return;
+    const aviso = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', aviso);
+    return () => window.removeEventListener('beforeunload', aviso);
+  }, [sujo]);
+
+  const salvar = async () => {
+    setSalvando(true);
+    try {
+      if (emAndamento.current) await emAndamento.current;
+      await gravar();
       await carregar();
+      setAuto({ estado: 'ok', em: new Date() });
       toast({ kind: 'ok', title: 'Proposta salva' });
     } catch (e) {
       const err = e as ApiError;
@@ -87,8 +141,16 @@ export default function PropostaEditor() {
     } finally { setSalvando(false); }
   };
 
-  const exportar = (formato: 'pdf' | 'docx' | 'xlsx') =>
-    api.download(`/proposals/${id}/export/${formato}`, `proposta-${p.number}.${formato}`);
+  /** Antes de exportar ou sair, grava o que estiver pendente. */
+  const garantirSalvo = async () => (sujo && !encerrada ? autoSalvar() : true);
+
+  const exportar = async (formato: 'pdf' | 'docx' | 'xlsx') => {
+    if (!(await garantirSalvo())) {
+      toast({ kind: 'err', title: 'Corrija a proposta antes de exportar', body: 'O salvamento automático foi recusado — veja o aviso no topo.' });
+      return;
+    }
+    return api.download(`/proposals/${id}/export/${formato}`, `proposta-${p.number}.${formato}`);
+  };
 
   const mudarStatus = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -136,13 +198,16 @@ export default function PropostaEditor() {
     <div className="space-y-6">
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
-          <button onClick={() => nav('/app/propostas')} className="mb-1 flex items-center gap-1.5 text-[13px] text-muted hover:text-ink">
+          <button onClick={async () => { await garantirSalvo(); nav('/app/propostas'); }} className="mb-1 flex items-center gap-1.5 text-[13px] text-muted hover:text-ink">
             <ArrowLeft size={14} /> Voltar às propostas
           </button>
           <div className="flex flex-wrap items-center gap-2.5">
             <h1 className="text-[26px] font-bold tracking-tight">Proposta #{String(p.number).padStart(4, '0')}</h1>
             <Badge tone={STATUS_TOM[p.status]}>{STATUS_ROTULO[p.status]}</Badge>
-            {sujo && <Badge tone="warn">alterações não salvas</Badge>}
+            {!encerrada && auto.estado === 'erro' && <Badge tone="danger">não salvou</Badge>}
+            {!encerrada && auto.estado !== 'erro' && (sujo || auto.estado === 'salvando'
+              ? <Badge tone="warn">{auto.estado === 'salvando' ? 'salvando…' : 'alterações pendentes'}</Badge>
+              : auto.em && <Badge tone="ok">salvo automaticamente às {auto.em.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</Badge>)}
           </div>
           <p className="mt-1 text-[14px] text-muted">{p.clientName} · {p.clientLocal ?? 'sem local'}</p>
         </div>
@@ -159,6 +224,13 @@ export default function PropostaEditor() {
           )}
         </div>
       </header>
+
+      {!encerrada && auto.estado === 'erro' && (
+        <div role="alert" className="rounded-xl border border-danger/40 bg-danger/10 p-4 text-[14px] text-danger">
+          <p className="font-semibold">O salvamento automático não conseguiu gravar.</p>
+          <p className="mt-1">{auto.msg}</p>
+        </div>
+      )}
 
       {alertas.length > 0 && (
         <div role="alert" className="rounded-xl border border-danger/40 bg-danger/10 p-4">
