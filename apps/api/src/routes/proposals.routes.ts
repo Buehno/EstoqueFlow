@@ -808,6 +808,33 @@ export default async function proposalRoutes(app: FastifyInstance) {
     });
   });
 
+  /**
+   * Propostas criadas por uma pessoa da equipe — prévia (GET) e exclusão
+   * definitiva de todas (POST, exige confirmar: true). Itens e linha do tempo
+   * vão junto (cascade); modelos, produtos e estoque não são tocados.
+   */
+  app.get('/proposals/por-usuario/:userId', { preHandler: requireRole(...CAN_MANAGE) }, async (req) => {
+    const { userId } = z.object({ userId: z.string().uuid() }).parse(req.params);
+    const lista = await prisma.proposal.findMany({
+      where: { companyId: req.user!.companyId, userId },
+      select: { id: true, number: true, status: true, clientName: true, total: true, createdAt: true },
+      orderBy: { number: 'asc' },
+    });
+    return {
+      total: lista.length,
+      valor: lista.reduce((a, p) => a + Number(p.total), 0),
+      itens: lista.map((p) => ({ ...p, total: Number(p.total) })),
+    };
+  });
+
+  app.post('/proposals/por-usuario/:userId/excluir', { preHandler: requireRole(...CAN_MANAGE) }, async (req) => {
+    const { userId } = z.object({ userId: z.string().uuid() }).parse(req.params);
+    const { confirmar } = z.object({ confirmar: z.literal(true) }).parse(req.body);
+    void confirmar;
+    const r = await prisma.proposal.deleteMany({ where: { companyId: req.user!.companyId, userId } });
+    return { ok: true, excluidas: r.count };
+  });
+
   app.delete('/proposals/:id', { preHandler: requireRole(...CAN_MANAGE) }, async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const p = await prisma.proposal.findFirst({ where: { id, companyId: req.user!.companyId } });

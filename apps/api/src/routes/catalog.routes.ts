@@ -7,6 +7,7 @@ import { enqueueProduct } from '../services/sync.service.js';
 import { TABELAS_FORNECEDORES } from '../assets/tabelas-fornecedores.js';
 import { FAMILIAS_PADRAO, resumo as resumoEmbalagem } from '../services/embalagem.js';
 import { gerarIdsUnicos, proximoIdUnico } from '../services/master-data.service.js';
+import { ajuste } from '../services/stock.service.js';
 
 /**
  * O estoque desta operação não tem etiqueta nem código impresso: o produto é
@@ -560,6 +561,34 @@ export default async function catalogRoutes(app: FastifyInstance) {
 
     await prisma.$transaction(async (tx) => enqueueProduct(tx, req.user!.companyId, product.id));
     return product;
+  });
+
+  /**
+   * REMOVER do sistema (cadastro duplicado, item que não se vende mais).
+   * Não apaga nada do banco: zera o saldo de cada depósito com um AJUSTE
+   * rastreável (motivo + quem fez) e desativa o cadastro. O produto some da
+   * busca, do balcão, do /peça, das propostas novas e da lista de compra; o
+   * histórico e as propostas antigas continuam intactos. Reativável.
+   */
+  app.post('/products/:id/remover', { preHandler: requireCap('GERENCIAR_CADASTROS') }, async (req) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const { motivo } = z.object({ motivo: z.string().optional() }).parse(req.body ?? {});
+    const companyId = req.user!.companyId;
+    const produto = await prisma.product.findFirst({ where: { id, companyId }, include: { stockItems: true } });
+    if (!produto) throw notFound('Produto não encontrado.');
+
+    let zerados = 0;
+    for (const s of produto.stockItems) {
+      if (Number(s.quantity) === 0 && Number(s.remnant) === 0) continue;
+      await ajuste({
+        companyId, userId: req.user!.id, productId: id, warehouseId: s.warehouseId,
+        newQuantity: 0, ...(produto.packType ? { newRemnantMeters: 0 } : {}),
+        reason: motivo?.trim() || 'Remoção de cadastro',
+      });
+      zerados++;
+    }
+    await prisma.product.update({ where: { id }, data: { active: false } });
+    return { ok: true, depositosZerados: zerados };
   });
 
   app.patch('/products/:id', { preHandler: requireCap('GERENCIAR_CADASTROS') }, async (req) => {

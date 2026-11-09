@@ -47,6 +47,10 @@ export default function Equipe() {
   const [modalNovo, setModalNovo] = useState(false);
   const [editando, setEditando] = useState<U | null>(null);
   const [excluindo, setExcluindo] = useState<U | null>(null);
+  /** Excluir as propostas criadas por uma pessoa: prévia antes de apagar. */
+  const [propostasDe, setPropostasDe] = useState<U | null>(null);
+  const [previa, setPrevia] = useState<{ total: number; valor: number; itens: { id: string; number: number; status: string; clientName: string; total: number }[] } | null>(null);
+  const [apagando, setApagando] = useState(false);
   const [salvandoPerm, setSalvandoPerm] = useState<string | null>(null);
   const toast = useToast();
   const { me, reload } = useAuth();
@@ -119,6 +123,23 @@ export default function Equipe() {
     catch (err) { erro('Não foi possível alterar', err); }
   };
 
+  const abrirPropostas = async (u: U) => {
+    setPropostasDe(u); setPrevia(null);
+    try { setPrevia(await api.get(`/proposals/por-usuario/${u.id}`)); }
+    catch (err) { erro('Não foi possível listar as propostas', err); setPropostasDe(null); }
+  };
+
+  const apagarPropostas = async () => {
+    if (!propostasDe) return;
+    setApagando(true);
+    try {
+      const r = await api.post<{ excluidas: number }>(`/proposals/por-usuario/${propostasDe.id}/excluir`, { confirmar: true });
+      toast({ kind: 'ok', title: `${r.excluidas} proposta(s) excluída(s)`, body: propostasDe.name });
+      setPropostasDe(null); setPrevia(null);
+    } catch (err) { erro('Não foi possível excluir', err); }
+    finally { setApagando(false); }
+  };
+
   const excluir = async () => {
     if (!excluindo) return;
     try {
@@ -179,6 +200,7 @@ export default function Equipe() {
                   <div className="flex flex-wrap justify-end gap-1.5">
                     <button onClick={() => setEditando(u)} className="btn-ghost btn-sm gap-1.5" aria-label={`Editar ${u.name}`}><Pencil size={14} /> Editar</button>
                     <button onClick={() => alternarAtivo(u)} className="btn-ghost btn-sm">{u.active ? 'Desativar' : 'Reativar'}</button>
+                    <button onClick={() => abrirPropostas(u)} className="btn-ghost btn-sm" aria-label={`Propostas de ${u.name}`}>Propostas</button>
                     {temOverride && (
                       <button onClick={() => voltarAoPadrao(u)} disabled={salvandoPerm === `${u.id}:*`} className="btn-ghost btn-sm gap-1.5" title="Tira todos os liga/desliga e volta ao padrão do papel">
                         <RotateCcw size={14} /> Padrão do papel
@@ -292,6 +314,33 @@ export default function Equipe() {
             </div>
           </form>
         )}
+      </Modal>
+
+      <Modal open={!!propostasDe} onClose={() => { setPropostasDe(null); setPrevia(null); }} title={propostasDe ? `Propostas de ${propostasDe.name}` : ''}>
+        {propostasDe && (!previa ? <Spinner /> : previa.total === 0 ? (
+          <p className="text-[14px] text-muted">{propostasDe.name} não tem nenhuma proposta.</p>
+        ) : (
+          <div className="space-y-4">
+            <p className="text-[14px] leading-relaxed text-muted">
+              <strong className="text-ink">{previa.total}</strong> proposta(s), somando{' '}
+              <strong className="text-ink">{previa.valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</strong>.
+              A exclusão é <strong className="text-danger">definitiva</strong>: leva junto os itens e a linha do tempo de cada uma.
+              Modelos, produtos e estoque não são alterados.
+            </p>
+            <ul className="max-h-64 space-y-1 overflow-auto rounded-lg border border-line p-2 text-[13px]">
+              {previa.itens.map((p) => (
+                <li key={p.id} className="flex justify-between gap-3">
+                  <span className="truncate">#{String(p.number).padStart(4, '0')} · {p.clientName}</span>
+                  <span className="shrink-0 text-muted">{p.status.toLowerCase().replace(/_/g, ' ')} · {p.total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                </li>
+              ))}
+            </ul>
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => { setPropostasDe(null); setPrevia(null); }} className="btn-ghost">Cancelar</button>
+              <button type="button" onClick={apagarPropostas} disabled={apagando} className="btn-danger">{apagando ? 'Excluindo…' : `Excluir as ${previa.total}`}</button>
+            </div>
+          </div>
+        ))}
       </Modal>
 
       <Modal open={!!excluindo} onClose={() => setExcluindo(null)} title="Excluir pessoa">

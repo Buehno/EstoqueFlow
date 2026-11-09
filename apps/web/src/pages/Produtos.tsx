@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { BookOpen, Fingerprint, Package, Plus, Ruler, Search, Upload } from 'lucide-react';
+import { BookOpen, Fingerprint, Package, Plus, Ruler, Search, Trash2, Upload } from 'lucide-react';
 import { api, ApiError, type Product } from '../lib/api';
 import { Badge, brl, Card, Empty, Field, Input, Modal, qty, Select, Spinner, Table, useToast } from '../lib/ui';
 import { useAuth } from '../App';
@@ -15,6 +15,9 @@ export default function Produtos() {
   const [aplicandoEmbalagens, setAplicandoEmbalagens] = useState(false);
   const [gerandoIds, setGerandoIds] = useState(false);
   const [tipoEmbalagem, setTipoEmbalagem] = useState<string>('');
+  /** Produto a remover (confirmação) e se a lista mostra os removidos. */
+  const [removendo, setRemovendo] = useState<Product | null>(null);
+  const [verRemovidos, setVerRemovidos] = useState(false);
   const toast = useToast();
   const { pode } = useAuth();
   const podeCarregarTabelas = pode('GERENCIAR_CADASTROS');
@@ -77,7 +80,7 @@ export default function Produtos() {
 
   const load = async (q = '') => {
     setLoading(true);
-    const res = await api.get<{ items: Product[] }>(`/products?take=200${q ? `&search=${encodeURIComponent(q)}` : ''}`);
+    const res = await api.get<{ items: Product[] }>(`/products?take=200${verRemovidos ? '' : '&active=true'}${q ? `&search=${encodeURIComponent(q)}` : ''}`);
     setItems(res.items);
     setLoading(false);
   };
@@ -90,7 +93,31 @@ export default function Produtos() {
   useEffect(() => {
     const t = setTimeout(() => void load(search), 320);
     return () => clearTimeout(t);
-  }, [search]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search, verRemovidos]);
+
+  /** Zera o saldo (AJUSTE rastreável) e desativa o cadastro. */
+  const remover = async () => {
+    if (!removendo) return;
+    try {
+      await api.post(`/products/${removendo.id}/remover`, { motivo: 'Remoção de cadastro (duplicado ou fora de linha)' });
+      toast({ kind: 'ok', title: 'Produto removido', body: removendo.name });
+      setRemovendo(null); setModal(null); setEditing(null);
+      void load(search);
+    } catch (err) {
+      toast({ kind: 'err', title: 'Não foi possível remover', body: err instanceof ApiError ? err.message : undefined });
+    }
+  };
+
+  const reativar = async (p: Product) => {
+    try {
+      await api.patch(`/products/${p.id}`, { active: true });
+      toast({ kind: 'ok', title: 'Produto reativado', body: p.name });
+      setModal(null); setEditing(null); void load(search);
+    } catch (err) {
+      toast({ kind: 'err', title: 'Não foi possível reativar', body: err instanceof ApiError ? err.message : undefined });
+    }
+  };
 
   const salvar = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -177,6 +204,10 @@ export default function Produtos() {
           aria-label="Buscar produtos"
         />
       </div>
+      <label className="-mt-3 flex items-center gap-2 text-[13px] text-muted">
+        <input type="checkbox" checked={verRemovidos} onChange={(e) => setVerRemovidos(e.target.checked)} className="h-4 w-4" />
+        Mostrar produtos removidos
+      </label>
 
       <Card>
         {loading ? (
@@ -289,10 +320,31 @@ export default function Produtos() {
             <Input name="minStock" type="number" step="0.001" min="0" defaultValue={editing?.minStock ?? 0} />
           </Field>
           <div className="flex items-end justify-end gap-2 sm:col-span-2">
+            {editing && podeCarregarTabelas && (editing.active
+              ? <button type="button" onClick={() => setRemovendo(editing)} className="btn-ghost mr-auto gap-1.5 text-danger hover:text-danger"><Trash2 size={15} /> Remover do sistema</button>
+              : <button type="button" onClick={() => reativar(editing)} className="btn-ghost mr-auto">Reativar produto</button>)}
             <button type="button" onClick={() => { setModal(null); setEditing(null); }} className="btn-ghost">Cancelar</button>
             <button type="submit" className="btn-primary">{editing ? 'Salvar alterações' : 'Cadastrar produto'}</button>
           </div>
         </form>
+      </Modal>
+
+      <Modal open={!!removendo} onClose={() => setRemovendo(null)} title="Remover produto do sistema">
+        {removendo && (
+          <div className="space-y-4">
+            <p className="text-[14px] leading-relaxed text-muted">
+              <strong className="text-ink">{removendo.name}</strong> sai da busca, do balcão, das propostas novas e da lista de compra.
+              {(removendo.totalStock ?? 0) > 0
+                ? <> O saldo atual (<strong className="text-ink">{qty(removendo.totalStock ?? 0)}</strong>) será zerado com um ajuste registrado no histórico.</>
+                : ' Não há saldo em estoque.'}
+              {' '}O histórico e as propostas antigas continuam intactos, e dá para reativar depois.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setRemovendo(null)} className="btn-ghost">Cancelar</button>
+              <button type="button" onClick={remover} className="btn-danger">Remover</button>
+            </div>
+          </div>
+        )}
       </Modal>
 
       <Modal open={modal === 'lote'} onClose={() => setModal(null)} title="Importar lista de produtos" wide>
