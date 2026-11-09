@@ -591,6 +591,32 @@ export default async function catalogRoutes(app: FastifyInstance) {
     return { ok: true, depositosZerados: zerados };
   });
 
+  /**
+   * EXCLUIR de vez. Apaga o produto, o saldo e o histórico de movimentos e
+   * contagens dele; nas propostas e modelos antigos o item fica como texto
+   * livre (a descrição continua lá, só perde o vínculo). Produto que já foi
+   * VENDIDO no balcão não é apagado — a venda ficaria sem o item — e volta
+   * 409 explicando; esse continua só desativado.
+   */
+  app.delete('/products/:id', { preHandler: requireCap('GERENCIAR_CADASTROS') }, async (req) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const companyId = req.user!.companyId;
+    const produto = await prisma.product.findFirst({ where: { id, companyId } });
+    if (!produto) throw notFound('Produto não encontrado.');
+    const vendas = await prisma.saleItem.count({ where: { productId: id } });
+    if (vendas > 0) {
+      await prisma.product.update({ where: { id }, data: { active: false } });
+      throw conflict(`"${produto.name}" já aparece em ${vendas} venda(s) do balcão e não pode ser apagado sem estragar essas vendas. Ele foi desativado: não aparece mais em busca, balcão, propostas nem lista de compra.`);
+    }
+    const r = await prisma.$transaction(async (tx) => {
+      const movimentos = await tx.movement.deleteMany({ where: { productId: id, companyId } });
+      await tx.inventoryCountItem.deleteMany({ where: { productId: id } });
+      await tx.product.delete({ where: { id } }); // saldo (stock_items) vai junto; propostas ficam com o texto
+      return { movimentos: movimentos.count };
+    });
+    return { ok: true, movimentosApagados: r.movimentos };
+  });
+
   app.patch('/products/:id', { preHandler: requireCap('GERENCIAR_CADASTROS') }, async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const body = z

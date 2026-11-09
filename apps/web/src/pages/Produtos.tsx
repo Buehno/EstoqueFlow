@@ -96,17 +96,18 @@ export default function Produtos() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search, verRemovidos]);
 
-  /** Zera o saldo (AJUSTE rastreável) e desativa o cadastro. */
+  /** Exclui o produto de vez (saldo e histórico de movimentos juntos). */
   const remover = async () => {
     if (!removendo) return;
     try {
-      await api.post(`/products/${removendo.id}/remover`, { motivo: 'Remoção de cadastro (duplicado ou fora de linha)' });
-      toast({ kind: 'ok', title: 'Produto removido', body: removendo.name });
-      setRemovendo(null); setModal(null); setEditing(null);
-      void load(search);
+      await api.del(`/products/${removendo.id}`);
+      toast({ kind: 'ok', title: 'Produto excluído', body: removendo.name });
     } catch (err) {
-      toast({ kind: 'err', title: 'Não foi possível remover', body: err instanceof ApiError ? err.message : undefined });
+      // Produto já vendido no balcão: o servidor desativa em vez de apagar e explica.
+      toast({ kind: 'err', title: 'Não foi possível excluir', body: err instanceof ApiError ? err.message : undefined });
     }
+    setRemovendo(null); setModal(null); setEditing(null);
+    void load(search);
   };
 
   const reativar = async (p: Product) => {
@@ -206,7 +207,7 @@ export default function Produtos() {
       </div>
       <label className="-mt-3 flex items-center gap-2 text-[13px] text-muted">
         <input type="checkbox" checked={verRemovidos} onChange={(e) => setVerRemovidos(e.target.checked)} className="h-4 w-4" />
-        Mostrar produtos removidos
+        Mostrar produtos desativados
       </label>
 
       <Card>
@@ -320,28 +321,30 @@ export default function Produtos() {
             <Input name="minStock" type="number" step="0.001" min="0" defaultValue={editing?.minStock ?? 0} />
           </Field>
           <div className="flex items-end justify-end gap-2 sm:col-span-2">
-            {editing && podeCarregarTabelas && (editing.active
-              ? <button type="button" onClick={() => setRemovendo(editing)} className="btn-ghost mr-auto gap-1.5 text-danger hover:text-danger"><Trash2 size={15} /> Remover do sistema</button>
-              : <button type="button" onClick={() => reativar(editing)} className="btn-ghost mr-auto">Reativar produto</button>)}
+            {editing && podeCarregarTabelas && (
+              <div className="mr-auto flex gap-2">
+                <button type="button" onClick={() => setRemovendo(editing)} className="btn-ghost gap-1.5 text-danger hover:text-danger"><Trash2 size={15} /> Excluir do sistema</button>
+                {!editing.active && <button type="button" onClick={() => reativar(editing)} className="btn-ghost">Reativar</button>}
+              </div>
+            )}
             <button type="button" onClick={() => { setModal(null); setEditing(null); }} className="btn-ghost">Cancelar</button>
             <button type="submit" className="btn-primary">{editing ? 'Salvar alterações' : 'Cadastrar produto'}</button>
           </div>
         </form>
       </Modal>
 
-      <Modal open={!!removendo} onClose={() => setRemovendo(null)} title="Remover produto do sistema">
+      <Modal open={!!removendo} onClose={() => setRemovendo(null)} title="Excluir produto do sistema">
         {removendo && (
           <div className="space-y-4">
             <p className="text-[14px] leading-relaxed text-muted">
-              <strong className="text-ink">{removendo.name}</strong> sai da busca, do balcão, das propostas novas e da lista de compra.
-              {(removendo.totalStock ?? 0) > 0
-                ? <> O saldo atual (<strong className="text-ink">{qty(removendo.totalStock ?? 0)}</strong>) será zerado com um ajuste registrado no histórico.</>
-                : ' Não há saldo em estoque.'}
-              {' '}O histórico e as propostas antigas continuam intactos, e dá para reativar depois.
+              <strong className="text-ink">{removendo.name}</strong> será <strong className="text-danger">apagado de vez</strong>, junto com o
+              saldo{(removendo.totalStock ?? 0) > 0 ? <> (<strong className="text-ink">{qty(removendo.totalStock ?? 0)}</strong> hoje)</> : ''} e o
+              histórico de entradas, saídas e transferências dele. Não dá para desfazer. Nas propostas antigas o item continua com a descrição,
+              só sem o vínculo com o estoque. Se o produto já foi vendido no balcão, ele é apenas desativado.
             </p>
             <div className="flex justify-end gap-2">
               <button type="button" onClick={() => setRemovendo(null)} className="btn-ghost">Cancelar</button>
-              <button type="button" onClick={remover} className="btn-danger">Remover</button>
+              <button type="button" onClick={remover} className="btn-danger">Excluir de vez</button>
             </div>
           </div>
         )}
