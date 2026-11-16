@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import {
   ArrowLeftRight, ChevronDown, ClipboardCheck, GraduationCap, LayoutDashboard, LogOut, Menu,
-  FileText, Moon, Package, PackageMinus, PackagePlus, PlugZap, ScrollText, ShoppingCart, Sun, TrendingUp,
+  FileText, Moon, Package, PackageMinus, PackagePlus, PlugZap, ScrollText, ShoppingBasket, ShoppingCart, Sun, TrendingUp,
   Users, Warehouse, X,
 } from 'lucide-react';
 import { cx, useTheme } from '../lib/ui';
@@ -18,6 +18,7 @@ type ItemNav = { to: string; label: string; icon: typeof ShoppingCart; end?: boo
 export const NAV: ItemNav[] = [
   { to: '/app/pdv', label: 'Saída Balcão', icon: ShoppingCart, caps: ['VENDER_BALCAO'] },
   { to: '/app/propostas', label: 'Propostas', icon: FileText, caps: ['GERENCIAR_PROPOSTAS'] },
+  { to: '/app/compras', label: 'Compras', icon: ShoppingBasket, caps: ['VER_ALERTAS', 'VER_RELATORIO_COMPLETO'] },
   { to: '/app/movimentacoes/entrada', label: 'Entrada de Estoque', icon: PackagePlus, caps: ['MOVIMENTAR_ESTOQUE'] },
   { to: '/app/movimentacoes/saida', label: 'Saída de Estoque', icon: PackageMinus, caps: ['MOVIMENTAR_ESTOQUE'] },
   { to: '/app/movimentacoes/transferencia', label: 'Transferência entre Depósitos', icon: ArrowLeftRight, caps: ['MOVIMENTAR_ESTOQUE'] },

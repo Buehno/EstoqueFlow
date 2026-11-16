@@ -26,6 +26,7 @@ import countsRoutes from './routes/counts.routes.js';
 import reportsRoutes from './routes/reports.routes.js';
 import tutorialRoutes from './routes/tutorial.routes.js';
 import proposalRoutes from './routes/proposals.routes.js';
+import purchaseListsRoutes from './routes/purchase-lists.routes.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // dist/server.js → apps/api/dist → ../../web/dist
@@ -123,6 +124,7 @@ app.get('/api', async () => ({
     'POST /api/movements/transferencia', 'POST /api/movements/ajuste',
     'POST /api/sales', 'GET /api/sales',
     'POST /api/counts', 'POST /api/counts/:id/aplicar',
+    'GET|POST /api/purchase-lists', 'POST /api/purchase-lists/:id/status', 'GET /api/purchase-lists/:id/export/pdf|xlsx',
     'GET /api/reports/dashboard', 'GET /api/reports/abc', 'GET /api/reports/giro',
     'GET /api/sync/status',
   ],
@@ -137,6 +139,7 @@ await app.register(salesRoutes, { prefix: '/api' });
 await app.register(countsRoutes, { prefix: '/api' });
 await app.register(reportsRoutes, { prefix: '/api' });
 await app.register(proposalRoutes, { prefix: '/api' });
+await app.register(purchaseListsRoutes, { prefix: '/api' });
 
 // ─────────────────────── Frontend (SPA) ───────────────────────
 if (existsSync(WEB_DIST)) {

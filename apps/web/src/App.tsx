@@ -15,6 +15,8 @@ import Movimentacoes from './pages/Movimentacoes';
 import PDV from './pages/PDV';
 import Inventario from './pages/Inventario';
 import Relatorios from './pages/Relatorios';
+import Compras from './pages/Compras';
+import CompraDetalhe from './pages/CompraDetalhe';
 import Integracoes from './pages/Integracoes';
 import Equipe from './pages/Equipe';
 import Propostas from './pages/Propostas';
@@ -79,6 +81,8 @@ export default function App() {
           <Route path="propostas/:id" element={<Pode caps={['GERENCIAR_PROPOSTAS']}><PropostaEditor /></Pode>} />
           <Route path="inventario" element={<Pode caps={['GERENCIAR_INVENTARIO']}><Inventario /></Pode>} />
           <Route path="relatorios" element={<Pode caps={['VER_RELATORIO_COMPLETO', 'VER_ALERTAS']}><Relatorios /></Pode>} />
+          <Route path="compras" element={<Pode caps={['VER_ALERTAS', 'VER_RELATORIO_COMPLETO']}><Compras /></Pode>} />
+          <Route path="compras/:id" element={<Pode caps={['VER_ALERTAS', 'VER_RELATORIO_COMPLETO']}><CompraDetalhe /></Pode>} />
           <Route path="integracoes" element={<Pode caps={['GERENCIAR_REGRAS_ALERTA']}><Integracoes /></Pode>} />
           <Route path="equipe" element={<Pode caps={['GERENCIAR_EQUIPE']}><Equipe /></Pode>} />
         </Route>

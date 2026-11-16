@@ -79,14 +79,14 @@ enum SyncOp {
 // ─────────────────────────── TENANT ───────────────────────────
 
 model Company {
-  id        String   @id @default(uuid()) @db.Uuid
+  id        String  @id @default(uuid()) @db.Uuid
   name      String
-  legalName String?  @map("legal_name")
-  cnpj      String?  @unique
-  slug      String   @unique
+  legalName String? @map("legal_name")
+  cnpj      String? @unique
+  slug      String  @unique
   phone     String?
   email     String?
-  logoUrl   String?  @map("logo_url")
+  logoUrl   String? @map("logo_url")
 
   // Alerta diário por e-mail (27/10): resumo dos itens em alerta de compra.
   // SMTP configurável em Integrações; a senha nunca volta para a tela.
@@ -110,19 +110,20 @@ model Company {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  users           User[]
-  warehouses      Warehouse[]
-  products        Product[]
-  categories      Category[]
-  suppliers       Supplier[]
-  customers       Customer[]
-  movements       Movement[]
-  sales           Sale[]
-  inventoryCounts InventoryCount[]
-  auditLogs       AuditLog[]
-  syncOutbox      SyncOutbox[]
-  proposals          Proposal[]
-  proposalTemplates  ProposalTemplate[]
+  users             User[]
+  warehouses        Warehouse[]
+  products          Product[]
+  categories        Category[]
+  suppliers         Supplier[]
+  customers         Customer[]
+  movements         Movement[]
+  sales             Sale[]
+  inventoryCounts   InventoryCount[]
+  auditLogs         AuditLog[]
+  syncOutbox        SyncOutbox[]
+  proposals         Proposal[]
+  proposalTemplates ProposalTemplate[]
+  purchaseLists     PurchaseList[]
 
   @@map("companies")
 }
@@ -162,6 +163,7 @@ model User {
   auditLogs       AuditLog[]
   inventoryCounts InventoryCount[]
   proposals       Proposal[]
+  purchaseLists   PurchaseList[]
 
   @@unique([companyId, email])
   @@index([companyId])
@@ -184,12 +186,12 @@ model Warehouse {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  company        Company              @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  stockItems     StockItem[]
-  movementsFrom  Movement[]           @relation("MovementFrom")
-  movementsTo    Movement[]           @relation("MovementTo")
-  sales          Sale[]
-  counts         InventoryCount[]
+  company       Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  stockItems    StockItem[]
+  movementsFrom Movement[]       @relation("MovementFrom")
+  movementsTo   Movement[]       @relation("MovementTo")
+  sales         Sale[]
+  counts        InventoryCount[]
 
   @@unique([companyId, code])
   @@index([companyId])
@@ -197,14 +199,14 @@ model Warehouse {
 }
 
 model Category {
-  id        String   @id @default(uuid()) @db.Uuid
-  companyId String   @map("company_id") @db.Uuid
-  name      String
-  color     String?  @default("#64748b")
+  id         String   @id @default(uuid()) @db.Uuid
+  companyId  String   @map("company_id") @db.Uuid
+  name       String
+  color      String?  @default("#64748b")
   /// Prefixo de 3 letras do ID único dos produtos desta categoria (TUB-00012).
   /// Derivado do nome na primeira vez, único por empresa; pode ser editado.
-  codePrefix String? @map("code_prefix")
-  createdAt DateTime @default(now()) @map("created_at")
+  codePrefix String?  @map("code_prefix")
+  createdAt  DateTime @default(now()) @map("created_at")
 
   company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   products Product[]
@@ -224,8 +226,9 @@ model Supplier {
   active    Boolean  @default(true)
   createdAt DateTime @default(now()) @map("created_at")
 
-  company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  products Product[]
+  company       Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  products      Product[]
+  purchaseLists PurchaseList[]
 
   @@unique([companyId, name])
   @@map("suppliers")
@@ -276,21 +279,21 @@ model Product {
   measure     Decimal? @db.Decimal(14, 4)
   measureUnit String?  @map("measure_unit") // m, cm, mm, m², m³, kg, L
 
-  costPrice Decimal @default(0) @map("cost_price") @db.Decimal(14, 4)
+  costPrice        Decimal   @default(0) @map("cost_price") @db.Decimal(14, 4)
   /// Preço de venda principal — nas tabelas de fornecedor é o preço PARCELADO.
-  salePrice Decimal @default(0) @map("sale_price") @db.Decimal(14, 4)
+  salePrice        Decimal   @default(0) @map("sale_price") @db.Decimal(14, 4)
   /// Preço À VISTA, quando o fornecedor diferencia. Nulo = não há preço à vista próprio.
-  cashPrice Decimal? @map("cash_price") @db.Decimal(14, 4)
+  cashPrice        Decimal?  @map("cash_price") @db.Decimal(14, 4)
   /// Condição do preço parcelado, como está na tabela: "até 10x sem juros (Master/Visa)", "em 3x"…
-  installmentTerms String? @map("installment_terms")
+  installmentTerms String?   @map("installment_terms")
   /// Tabela de preço de origem + vigência — ex.: "SOLIS – Coletor solar – Julho/2026".
-  priceTable     String?   @map("price_table")
-  priceTableDate DateTime? @map("price_table_date") @db.Date
+  priceTable       String?   @map("price_table")
+  priceTableDate   DateTime? @map("price_table_date") @db.Date
   /// Código do produto no catálogo do fornecedor (modelo/referência).
-  supplierCode String? @map("supplier_code")
+  supplierCode     String?   @map("supplier_code")
   /// Vendido SOB ENCOMENDA: entra na proposta mesmo sem saldo em estoque e a
   /// proposta não exige saldo dele. É o caso dos itens das tabelas de fornecedor.
-  onDemand Boolean @default(false) @map("on_demand")
+  onDemand         Boolean   @default(false) @map("on_demand")
 
   /// Embalagem por comprimento (barra × metro, §4 do plano): "BARRA" ou "ROLO"
   /// e o comprimento de cada peça em metros (tubo de cobre: BARRA de 5 m).
@@ -306,26 +309,27 @@ model Product {
   categoryId String? @map("category_id") @db.Uuid
   supplierId String? @map("supplier_id") @db.Uuid
 
-  imageUrl String?  @map("image_url")
+  imageUrl String? @map("image_url")
 
   /// Texto normalizado (minúsculo e sem acento) com nome + descrição + tamanho +
   /// unidade + códigos. É contra ele que a busca do balcão roda, para que
   /// "papelao" ache "Papelão" e "abracadeira" ache "Abraçadeira".
   searchText String? @map("search_text")
 
-  active   Boolean  @default(true)
+  active    Boolean  @default(true)
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  company    Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  category   Category?   @relation(fields: [categoryId], references: [id], onDelete: SetNull)
-  supplier   Supplier?   @relation(fields: [supplierId], references: [id], onDelete: SetNull)
-  stockItems StockItem[]
-  movements  Movement[]
-  saleItems  SaleItem[]
-  countItems InventoryCountItem[]
+  company               Company                @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  category              Category?              @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  supplier              Supplier?              @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  stockItems            StockItem[]
+  movements             Movement[]
+  saleItems             SaleItem[]
+  countItems            InventoryCountItem[]
   proposalItems         ProposalItem[]
   proposalTemplateItems ProposalTemplateItem[]
+  purchaseListItems     PurchaseListItem[]
 
   @@unique([companyId, sku])
   @@unique([companyId, barcode])
@@ -340,9 +344,9 @@ model Product {
 
 /// Saldo por produto × depósito. Fonte da verdade do estoque.
 model StockItem {
-  id          String  @id @default(uuid()) @db.Uuid
-  productId   String  @map("product_id") @db.Uuid
-  warehouseId String  @map("warehouse_id") @db.Uuid
+  id          String @id @default(uuid()) @db.Uuid
+  productId   String @map("product_id") @db.Uuid
+  warehouseId String @map("warehouse_id") @db.Uuid
 
   quantity Decimal @default(0) @db.Decimal(14, 3)
   reserved Decimal @default(0) @db.Decimal(14, 3)
@@ -366,8 +370,8 @@ model StockItem {
 // ─────────────────────────── MOVIMENTAÇÃO ───────────────────────────
 
 model Movement {
-  id        String       @id @default(uuid()) @db.Uuid
-  companyId String       @map("company_id") @db.Uuid
+  id        String         @id @default(uuid()) @db.Uuid
+  companyId String         @map("company_id") @db.Uuid
   /// Número sequencial legível por empresa
   number    Int
   type      MovementType
@@ -394,8 +398,8 @@ model Movement {
   document String? // NF, pedido, OS
   notes    String?
 
-  saleId    String? @map("sale_id") @db.Uuid
-  countId   String? @map("count_id") @db.Uuid
+  saleId     String? @map("sale_id") @db.Uuid
+  countId    String? @map("count_id") @db.Uuid
   reversalOf String? @map("reversal_of") @db.Uuid
 
   userId    String   @map("user_id") @db.Uuid
@@ -418,27 +422,27 @@ model Movement {
 // ─────────────────────────── VENDA BALCÃO (PDV) ───────────────────────────
 
 model Sale {
-  id          String        @id @default(uuid()) @db.Uuid
-  companyId   String        @map("company_id") @db.Uuid
-  number      Int
-  warehouseId String        @map("warehouse_id") @db.Uuid
-  userId      String        @map("user_id") @db.Uuid
-  customerId  String?       @map("customer_id") @db.Uuid
-  customerName String?      @map("customer_name")
+  id           String  @id @default(uuid()) @db.Uuid
+  companyId    String  @map("company_id") @db.Uuid
+  number       Int
+  warehouseId  String  @map("warehouse_id") @db.Uuid
+  userId       String  @map("user_id") @db.Uuid
+  customerId   String? @map("customer_id") @db.Uuid
+  customerName String? @map("customer_name")
 
-  subtotal Decimal       @default(0) @db.Decimal(14, 2)
-  discount Decimal       @default(0) @db.Decimal(14, 2)
-  total    Decimal       @default(0) @db.Decimal(14, 2)
-  costTotal Decimal      @default(0) @map("cost_total") @db.Decimal(14, 2)
+  subtotal  Decimal @default(0) @db.Decimal(14, 2)
+  discount  Decimal @default(0) @db.Decimal(14, 2)
+  total     Decimal @default(0) @db.Decimal(14, 2)
+  costTotal Decimal @default(0) @map("cost_total") @db.Decimal(14, 2)
 
   payment  PaymentMethod @default(DINHEIRO)
   received Decimal?      @db.Decimal(14, 2)
   change   Decimal?      @db.Decimal(14, 2)
 
-  status    SaleStatus @default(FINALIZADA)
-  notes     String?
-  createdAt DateTime   @default(now()) @map("created_at")
-  canceledAt DateTime? @map("canceled_at")
+  status     SaleStatus @default(FINALIZADA)
+  notes      String?
+  createdAt  DateTime   @default(now()) @map("created_at")
+  canceledAt DateTime?  @map("canceled_at")
 
   company   Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
   warehouse Warehouse  @relation(fields: [warehouseId], references: [id])
@@ -453,9 +457,9 @@ model Sale {
 }
 
 model SaleItem {
-  id        String  @id @default(uuid()) @db.Uuid
-  saleId    String  @map("sale_id") @db.Uuid
-  productId String  @map("product_id") @db.Uuid
+  id        String @id @default(uuid()) @db.Uuid
+  saleId    String @map("sale_id") @db.Uuid
+  productId String @map("product_id") @db.Uuid
 
   quantity  Decimal @db.Decimal(14, 3)
   unitPrice Decimal @map("unit_price") @db.Decimal(14, 4)
@@ -495,14 +499,14 @@ model InventoryCount {
 }
 
 model InventoryCountItem {
-  id        String  @id @default(uuid()) @db.Uuid
-  countId   String  @map("count_id") @db.Uuid
-  productId String  @map("product_id") @db.Uuid
+  id        String @id @default(uuid()) @db.Uuid
+  countId   String @map("count_id") @db.Uuid
+  productId String @map("product_id") @db.Uuid
 
-  expected  Decimal  @db.Decimal(14, 3)
-  counted   Decimal? @db.Decimal(14, 3)
-  diff      Decimal? @db.Decimal(14, 3)
-  applied   Boolean  @default(false)
+  expected Decimal  @db.Decimal(14, 3)
+  counted  Decimal? @db.Decimal(14, 3)
+  diff     Decimal? @db.Decimal(14, 3)
+  applied  Boolean  @default(false)
 
   count   InventoryCount @relation(fields: [countId], references: [id], onDelete: Cascade)
   product Product        @relation(fields: [productId], references: [id])
@@ -591,6 +595,90 @@ model Counter {
 //  produto do estoque — e o que não existe em estoque não entra na proposta.
 // ════════════════════════════════════════════════════════════════════════════
 
+// ═══════════════════ LISTAS DE COMPRA (carrinho do comprador, 16/11/2026) ═══════════════════
+// O relatório de compras diz O QUE está faltando; a lista de compra é o que o
+// comprador decidiu PEDIR: ele monta um carrinho a partir do alerta (ou de
+// qualquer produto), salva com nome, acompanha o status até a mercadoria
+// chegar e, ao marcar como comprada, pode dar entrada no estoque.
+
+enum PurchaseListStatus {
+  ABERTA // sendo montada / ainda não pedida
+  PEDIDA // pedido enviado ao fornecedor, aguardando chegar
+  COMPRADA // mercadoria chegou (entrada no estoque opcional)
+  CANCELADA
+}
+
+model PurchaseList {
+  id        String @id @default(uuid()) @db.Uuid
+  companyId String @map("company_id") @db.Uuid
+  number    Int
+
+  status       PurchaseListStatus @default(ABERTA)
+  name         String
+  /// Fornecedor da lista (livre: o comprador pode juntar itens de vários).
+  supplierId   String?            @map("supplier_id") @db.Uuid
+  supplierName String?            @map("supplier_name")
+  notes        String?            @db.Text
+
+  /// Soma de quantidade × custo unitário dos itens, recalculada a cada alteração.
+  total Decimal @default(0) @db.Decimal(14, 2)
+
+  // ── quem fez o quê, quando ──
+  createdById        String    @map("created_by_id") @db.Uuid
+  createdByName      String    @map("created_by_name")
+  orderedAt          DateTime? @map("ordered_at")
+  orderedByName      String?   @map("ordered_by_name")
+  boughtAt           DateTime? @map("bought_at")
+  boughtByName       String?   @map("bought_by_name")
+  canceledAt         DateTime? @map("canceled_at")
+  canceledByName     String?   @map("canceled_by_name")
+  /// Entrada no estoque gerada ao marcar como comprada (se o comprador pediu).
+  stockedAt          DateTime? @map("stocked_at")
+  stockedWarehouseId String?   @map("stocked_warehouse_id") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  company   Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  supplier  Supplier?          @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  createdBy User               @relation(fields: [createdById], references: [id])
+  items     PurchaseListItem[]
+
+  @@unique([companyId, number])
+  @@index([companyId, status])
+  @@index([companyId, createdAt])
+  @@map("purchase_lists")
+}
+
+model PurchaseListItem {
+  id     String @id @default(uuid()) @db.Uuid
+  listId String @map("list_id") @db.Uuid
+
+  productId    String? @map("product_id") @db.Uuid
+  /// Retrato do produto no momento em que entrou na lista (sobrevive à exclusão do cadastro).
+  sku          String?
+  name         String
+  unit         String  @default("UN")
+  supplierName String? @map("supplier_name")
+
+  quantity      Decimal  @default(1) @db.Decimal(14, 3)
+  unitCost      Decimal  @default(0) @map("unit_cost") @db.Decimal(14, 4)
+  total         Decimal  @default(0) @db.Decimal(14, 2)
+  /// Saldo total e estoque sugerido quando o item foi adicionado — contexto do pedido.
+  stockAtAdd    Decimal? @map("stock_at_add") @db.Decimal(14, 3)
+  minStockAtAdd Decimal? @map("min_stock_at_add") @db.Decimal(14, 3)
+  notes         String?
+
+  position  Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  list    PurchaseList @relation(fields: [listId], references: [id], onDelete: Cascade)
+  product Product?     @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([listId, position])
+  @@map("purchase_list_items")
+}
+
 enum ProposalStatus {
   RASCUNHO // sendo montada
   ENVIADA // foi para o cliente
@@ -619,13 +707,13 @@ model ProposalTemplate {
   companyId String @map("company_id") @db.Uuid
 
   name       String // nome interno do modelo
-  scopeTitle String @map("scope_title") // "SISTEMA DE AQUECIMENTO VIA SOLAR..."
+  scopeTitle String  @map("scope_title") // "SISTEMA DE AQUECIMENTO VIA SOLAR..."
   intro      String? // parágrafo opcional antes da tabela
 
-  paymentTerms String? @map("payment_terms")
-  paymentCash  String? @map("payment_cash")
+  paymentTerms  String? @map("payment_terms")
+  paymentCash   String? @map("payment_cash")
   deliveryTerms String? @map("delivery_terms")
-  validityDays Int     @default(10) @map("validity_days")
+  validityDays  Int     @default(10) @map("validity_days")
 
   closingNote String? @map("closing_note") // "Sem mais para o momento..."
   footerNote  String? @map("footer_note") // bloco IMPORTANTE! / NBR
@@ -650,12 +738,12 @@ model ProposalTemplateItem {
   id         String @id @default(uuid()) @db.Uuid
   templateId String @map("template_id") @db.Uuid
 
-  position    Int
-  quantity    Decimal @default(1) @db.Decimal(14, 3)
+  position     Int
+  quantity     Decimal @default(1) @db.Decimal(14, 3)
   quantityText String? @map("quantity_text") // "01", "03", "*" — como aparece no papel
-  description String  @db.Text
-  unitPrice   Decimal @default(0) @map("unit_price") @db.Decimal(14, 2)
-  total       Decimal @default(0) @db.Decimal(14, 2)
+  description  String  @db.Text
+  unitPrice    Decimal @default(0) @map("unit_price") @db.Decimal(14, 2)
+  total        Decimal @default(0) @db.Decimal(14, 2)
 
   /// Item ligado ao estoque. Nulo = item livre (mão de obra, estimativa).
   productId String? @map("product_id") @db.Uuid
@@ -677,20 +765,20 @@ model Proposal {
   status ProposalStatus @default(RASCUNHO)
 
   // ── cliente (a proposta guarda o retrato do que foi enviado) ──
-  customerId    String? @map("customer_id") @db.Uuid
-  clientName    String  @map("client_name")
-  clientPhone   String? @map("client_phone")
-  clientEmail   String? @map("client_email")
-  clientLocal   String? @map("client_local") // "RESERVA DA MATA - JUNDIAÍ / SP"
+  customerId     String? @map("customer_id") @db.Uuid
+  clientName     String  @map("client_name")
+  clientPhone    String? @map("client_phone")
+  clientEmail    String? @map("client_email")
+  clientLocal    String? @map("client_local") // "RESERVA DA MATA - JUNDIAÍ / SP"
   clientDocument String? @map("client_document")
 
   // ── corpo do documento ──
   scopeTitle String  @map("scope_title")
   intro      String?
 
-  subtotal Decimal @default(0) @db.Decimal(14, 2)
-  discount Decimal @default(0) @db.Decimal(14, 2)
-  total    Decimal @default(0) @db.Decimal(14, 2)
+  subtotal     Decimal @default(0) @db.Decimal(14, 2)
+  discount     Decimal @default(0) @db.Decimal(14, 2)
+  total        Decimal @default(0) @db.Decimal(14, 2)
   /// Valor por extenso, congelado no momento da emissão
   totalInWords String? @map("total_in_words")
 
@@ -701,10 +789,10 @@ model Proposal {
   validityDays  Int       @default(10) @map("validity_days")
   validUntil    DateTime? @map("valid_until")
 
-  closingNote String? @map("closing_note")
-  footerNote  String? @map("footer_note")
-  salesRep    String? @map("sales_rep")
-  city        String? @default("Jundiaí")
+  closingNote String?  @map("closing_note")
+  footerNote  String?  @map("footer_note")
+  salesRep    String?  @map("sales_rep")
+  city        String?  @default("Jundiaí")
   issueDate   DateTime @default(now()) @map("issue_date")
 
   // ── acompanhamento comercial ──
@@ -748,13 +836,13 @@ model ProposalItem {
   total        Decimal @default(0) @db.Decimal(14, 2)
 
   /// Vínculo com o estoque. Nulo = item livre.
-  productId String? @map("product_id") @db.Uuid
+  productId     String?  @map("product_id") @db.Uuid
   /// Saldo disponível no instante em que o item entrou — para conferência.
   stockAtInsert Decimal? @map("stock_at_insert") @db.Decimal(14, 3)
   /// Foto do item (data URI já comprimida no navegador) — sai ao lado da descrição no PDF/Word.
-  imageUrl  String? @map("image_url") @db.Text
+  imageUrl      String?  @map("image_url") @db.Text
   /// Qual preço da tabela do fornecedor entrou neste item (escolhido na hora): PARCELADO ou A_VISTA.
-  priceMode String? @map("price_mode")
+  priceMode     String?  @map("price_mode")
 
   proposal Proposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
   product  Product? @relation(fields: [productId], references: [id], onDelete: SetNull)

@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react';
-import { AlertTriangle, Copy, Download, FileSpreadsheet, FileText, PackageX, Ruler, TrendingUp, Truck } from 'lucide-react';
+import { AlertTriangle, Copy, Download, FileSpreadsheet, FileText, PackageX, Plus, Ruler, ShoppingBasket, TrendingUp, Truck } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { Bar, BarChart, CartesianGrid, Cell, LabelList, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import {
   api, ApiError,
-  type Fracionados, type GrupoDuplicado, type LinhaCompra, type PosicaoCompra, type SaldoQuebrado, type StockRow,
+  type Fracionados, type GrupoDuplicado, type LinhaCompra, type PosicaoCompra, type ProdutoEmListas, type SaldoQuebrado, type StockRow,
 } from '../lib/api';
+import { carrinho, useCarrinho } from '../lib/carrinho';
+import CarrinhoCompra from '../components/CarrinhoCompra';
 import { Badge, brl, Card, cx, Empty, int, qty, Spinner, Stat, Table, useToast } from '../lib/ui';
 import { useAuth } from '../App';
 
@@ -34,6 +37,8 @@ export default function Relatorios() {
   const [quebrados, setQuebrados] = useState<SaldoQuebrado[]>([]);
   const [fracionados, setFracionados] = useState<Fracionados | null>(null);
   const [duplicados, setDuplicados] = useState<GrupoDuplicado[]>([]);
+  const [emListas, setEmListas] = useState<ProdutoEmListas>({});
+  const itensCarrinho = useCarrinho();
   const [filtroCompra, setFiltroCompra] = useState<'alerta' | 'semMinimo' | 'todos'>('alerta');
   const [fornecedorSel, setFornecedorSel] = useState<string>('');
   const [menuExportar, setMenuExportar] = useState(false);
@@ -44,7 +49,7 @@ export default function Relatorios() {
   const podeCorrigir = pode('GERENCIAR_REGRAS_ALERTA');
 
   const carregar = async () => {
-    const [s, a, g, c, q, d, f] = await Promise.all([
+    const [s, a, g, c, q, d, f, el] = await Promise.all([
       api.get<StockRow[]>('/stock?take=1000'),
       api.get<any[]>('/reports/abc?dias=90'),
       api.get<any[]>('/reports/giro?dias=90'),
@@ -52,8 +57,9 @@ export default function Relatorios() {
       api.get<{ itens: SaldoQuebrado[] }>('/reports/saldos-quebrados'),
       api.get<{ grupos: GrupoDuplicado[] }>('/reports/duplicados'),
       api.get<Fracionados>('/reports/fracionados'),
+      api.get<ProdutoEmListas>('/purchase-lists/em-aberto-por-produto').catch(() => ({} as ProdutoEmListas)),
     ]);
-    setStock(s); setAbc(a); setGiro(g); setCompras(c); setQuebrados(q.itens); setDuplicados(d.grupos); setFracionados(f);
+    setStock(s); setAbc(a); setGiro(g); setCompras(c); setQuebrados(q.itens); setDuplicados(d.grupos); setFracionados(f); setEmListas(el);
     setLoading(false);
   };
 
@@ -75,6 +81,19 @@ export default function Relatorios() {
       : compras.itens;
   const listaCompra = fornecedorSel ? base.filter((i) => (i.fornecedor ?? '(sem fornecedor cadastrado)') === fornecedorSel) : base;
   const valorLista = listaCompra.reduce((a, i) => a + i.comprarParaRepor * i.custoMedio, 0);
+
+  /** Carrinho de compra: cada linha do relatório vira um item com a quantidade que falta para o sugerido. */
+  const paraCarrinho = (r: LinhaCompra) => ({
+    productId: r.productId, sku: r.sku, name: r.name, unit: r.unit, fornecedor: r.fornecedor,
+    custo: r.custoMedio, saldo: r.total, sugerido: r.minStock,
+    quantidade: r.comprarParaRepor > 0 ? r.comprarParaRepor : 1,
+  });
+  const noCarrinho = new Set(itensCarrinho.map((i) => i.productId));
+  const adicionarTodos = () => {
+    const novos = listaCompra.filter((r) => r.comprarParaRepor > 0 && !noCarrinho.has(r.productId));
+    carrinho.adicionarVarios(novos.map(paraCarrinho));
+    toast({ kind: 'ok', title: `${novos.length} item(ns) no carrinho`, body: fornecedorSel ? `Só ${fornecedorSel}.` : undefined });
+  };
 
   /** Extrai o relatório de compras: Excel completo, PDF ou CSV — da lista inteira ou só do fornecedor filtrado. */
   const extrairCompras = (formato: 'xlsx' | 'pdf' | 'csv', soFornecedor = false) => {
@@ -287,6 +306,7 @@ export default function Relatorios() {
             </Card>
           </div>
 
+          <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
           <Card
             title="Lista de compra"
             subtitle={`Regra: estoque sugerido é a quantidade que deve haver; quando o total dos depósitos chega a 50% dele, o item entra aqui com o que falta para voltar ao sugerido.${fornecedorSel ? ` · Filtrando: ${fornecedorSel}` : ''}`}
@@ -303,6 +323,9 @@ export default function Relatorios() {
                   <option value="">Todos os fornecedores</option>
                   {compras.porFornecedor.map((f) => <option key={f.fornecedor} value={f.fornecedor}>{f.fornecedor} ({f.itensParaComprar})</option>)}
                 </select>
+                {listaCompra.some((r) => r.comprarParaRepor > 0 && !noCarrinho.has(r.productId)) && (
+                  <button onClick={adicionarTodos} className="btn-primary btn-sm ml-1 gap-1.5"><ShoppingBasket size={14} /> Adicionar todos ({listaCompra.filter((r) => r.comprarParaRepor > 0 && !noCarrinho.has(r.productId)).length})</button>
+                )}
               </div>
             }
           >
@@ -311,6 +334,18 @@ export default function Relatorios() {
               keyOf={(r) => r.productId}
               empty={<Empty icon={<TrendingUp size={24} />} title="Nada nesta lista" body="Troque o filtro acima para ver as outras situações." />}
               columns={[
+                { key: 'add', header: 'Carrinho', render: (r) => (
+                  <div className="flex flex-col items-start gap-1">
+                    {noCarrinho.has(r.productId)
+                      ? <span className="text-[12px] text-ok">no carrinho</span>
+                      : <button onClick={() => { carrinho.adicionar(paraCarrinho(r)); }} className="btn-ghost btn-sm gap-1" aria-label={`Adicionar ${r.name} ao carrinho`}><Plus size={14} /> Adicionar</button>}
+                    {emListas[r.productId]?.length ? (
+                      <Link to={`/app/compras/${emListas[r.productId][0].listId}`} className="text-[11.5px] text-muted underline-offset-2 hover:underline" title={emListas[r.productId].map((x) => `${x.name} (${x.status.toLowerCase()})`).join(' · ')}>
+                        já na lista #{String(emListas[r.productId][0].number).padStart(4, '0')}{emListas[r.productId].length > 1 ? ` +${emListas[r.productId].length - 1}` : ''}
+                      </Link>
+                    ) : null}
+                  </div>
+                ) },
                 { key: 's', header: 'Situação', render: (r) => r.situacao === 'ALERTA_COMPRA'
                   ? <Badge tone={r.urgencia === 'ZERADO' ? 'danger' : r.urgencia === 'CRITICO' ? 'warn' : 'danger'}>{r.urgencia === 'ZERADO' ? 'ZERADO' : r.urgencia === 'CRITICO' ? 'crítico' : 'comprar'}</Badge>
                   : <Badge tone={TOM_SITUACAO[r.situacao]}>{ROTULO_SITUACAO[r.situacao]}</Badge> },
@@ -346,9 +381,18 @@ export default function Relatorios() {
               </p>
             )}
             <p className="mt-3 text-[12.5px] text-faint">
-              Use <b>Extrair relatório</b> (no topo) para baixar em Excel (resumo, lista, por fornecedor, por categoria, todos, sem sugerido), PDF para imprimir ou mandar no WhatsApp, ou CSV. Com um fornecedor filtrado, dá para extrair só o pedido dele.
+              <b>Adicionar</b> leva o item para o carrinho ao lado com a quantidade que falta; o carrinho vira uma lista de compra salva, com status até a mercadoria chegar. <b>Extrair relatório</b> (no topo) baixa a lista em Excel, PDF ou CSV.
             </p>
           </Card>
+          <Card
+            title={`Carrinho de compra${itensCarrinho.length ? ` (${itensCarrinho.length})` : ''}`}
+            subtitle="Junte os itens, acerte as quantidades e salve como lista."
+            action={<Link to="/app/compras" className="btn-ghost btn-sm">Ver listas</Link>}
+            className="xl:sticky xl:top-20"
+          >
+            <CarrinhoCompra />
+          </Card>
+          </div>
         </>
       )}
 

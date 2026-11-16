@@ -143,6 +143,35 @@ export interface PosicaoCompra {
   porCategoria: { categoria: string; produtos: number; alerta: number; total: number; valor: number; comprar: number }[];
   porFornecedor: { fornecedor: string; itensParaComprar: number; valor: number; zerados: number }[];
 }
+// ─── Listas de compra (carrinho do comprador, 16/11) ───
+export type StatusLista = 'ABERTA' | 'PEDIDA' | 'COMPRADA' | 'CANCELADA';
+export const ROTULO_STATUS_LISTA: Record<StatusLista, string> = { ABERTA: 'Aberta', PEDIDA: 'Pedida', COMPRADA: 'Comprada', CANCELADA: 'Cancelada' };
+export interface ItemListaCompra {
+  id: string; productId: string | null; sku: string | null; name: string; unit: string; supplierName: string | null;
+  quantity: number; unitCost: number; total: number;
+  stockAtAdd: number | null; minStockAtAdd: number | null; notes: string | null; position: number;
+}
+export interface ListaCompra {
+  id: string; number: number; status: StatusLista; name: string;
+  supplierId: string | null; supplierName: string | null; notes: string | null;
+  total: number; itens: number;
+  createdById: string; createdByName: string;
+  orderedAt: string | null; orderedByName: string | null;
+  boughtAt: string | null; boughtByName: string | null;
+  canceledAt: string | null; canceledByName: string | null;
+  stockedAt: string | null; stockedWarehouseId: string | null;
+  createdAt: string; updatedAt: string;
+  items: ItemListaCompra[];
+  /** Só na resposta de mudança de status para COMPRADA. */
+  entradasLancadas?: number; itensSemEntrada?: string[];
+}
+export interface ListagemListas {
+  items: ListaCompra[];
+  porStatus: Record<StatusLista, { listas: number; valor: number }>;
+}
+/** productId → listas pendentes em que já está. */
+export type ProdutoEmListas = Record<string, { listId: string; number: number; name: string; status: StatusLista; quantity: number }[]>;
+
 export interface SaldoQuebrado {
   productId: string; sku: string; name: string; unit: string;
   warehouseId: string; warehouse: string; warehouseCode: string;
