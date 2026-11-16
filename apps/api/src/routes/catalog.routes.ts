@@ -8,6 +8,7 @@ import { TABELAS_FORNECEDORES } from '../assets/tabelas-fornecedores.js';
 import { FAMILIAS_PADRAO, resumo as resumoEmbalagem } from '../services/embalagem.js';
 import { gerarIdsUnicos, proximoIdUnico } from '../services/master-data.service.js';
 import { ajuste } from '../services/stock.service.js';
+import { classificarPorNome } from '../services/compras.service.js';
 
 /**
  * O estoque desta operação não tem etiqueta nem código impresso: o produto é
@@ -144,19 +145,23 @@ export default async function catalogRoutes(app: FastifyInstance) {
   });
 
   // ─────────────────────── CATEGORIAS ───────────────────────
-  app.get('/categories', async (req) =>
-    prisma.category.findMany({
+  /** Categorias com a contagem de produtos ativos — a tela Produtos → Categorias usa. */
+  app.get('/categories', async (req) => {
+    const lista = await prisma.category.findMany({
       where: { companyId: req.user!.companyId },
       orderBy: { name: 'asc' },
-    }),
-  );
-
-  app.post('/categories', { preHandler: requireCap('GERENCIAR_CADASTROS') }, async (req) => {
-    const body = z.object({ name: z.string().min(1), color: z.string().optional() }).parse(req.body);
-    return prisma.category.create({ data: { ...body, companyId: req.user!.companyId } });
+      include: { _count: { select: { products: { where: { active: true } } } } },
+    });
+    return lista.map(({ _count, ...c }) => ({ ...c, produtos: _count.products }));
   });
 
-  /** Edita nome, cor e o prefixo do ID único (3 letras, único na empresa). */
+  /** Nova categoria: `kind` (PECA | EQUIPAMENTO) vem do nome se não for informado. */
+  app.post('/categories', { preHandler: requireCap('GERENCIAR_CADASTROS') }, async (req) => {
+    const body = z.object({ name: z.string().min(1), color: z.string().optional(), kind: z.enum(['PECA', 'EQUIPAMENTO']).optional() }).parse(req.body);
+    return prisma.category.create({ data: { ...body, kind: body.kind ?? classificarPorNome(body.name), companyId: req.user!.companyId } });
+  });
+
+  /** Edita nome, cor, prefixo do ID único (3 letras, único na empresa) e peça/equipamento. */
   app.patch('/categories/:id', { preHandler: requireCap('GERENCIAR_CADASTROS') }, async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const body = z
@@ -164,6 +169,7 @@ export default async function catalogRoutes(app: FastifyInstance) {
         name: z.string().min(1).optional(),
         color: z.string().optional(),
         codePrefix: z.string().regex(/^[A-Za-z]{3}$/, 'O prefixo tem exatamente 3 letras').transform((v) => v.toUpperCase()).optional(),
+        kind: z.enum(['PECA', 'EQUIPAMENTO']).optional(),
       })
       .parse(req.body);
     const companyId = req.user!.companyId;
@@ -328,7 +334,7 @@ export default async function catalogRoutes(app: FastifyInstance) {
       const c = await prisma.category.upsert({
         where: { companyId_name: { companyId, name: nome } },
         update: {},
-        create: { companyId, name: nome },
+        create: { companyId, name: nome, kind: classificarPorNome(nome) },
       });
       categorias.set(nome, c.id);
     }
@@ -697,7 +703,7 @@ export default async function catalogRoutes(app: FastifyInstance) {
     const categorias = new Map<string, string>();
     for (const nome of nomesCategoria) {
       const existente = await prisma.category.findFirst({ where: { companyId, name: nome } });
-      const cat = existente ?? (await prisma.category.create({ data: { companyId, name: nome } }));
+      const cat = existente ?? (await prisma.category.create({ data: { companyId, name: nome, kind: classificarPorNome(nome) } }));
       categorias.set(nome, cat.id);
     }
 

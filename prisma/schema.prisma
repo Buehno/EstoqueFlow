@@ -206,6 +206,11 @@ model Category {
   /// Prefixo de 3 letras do ID único dos produtos desta categoria (TUB-00012).
   /// Derivado do nome na primeira vez, único por empresa; pode ser editado.
   codePrefix String?  @map("code_prefix")
+  /// PECA (tubos, conexões, registros…) ou EQUIPAMENTO (boilers, bombas,
+  /// placas/coletores, aquecedores…). Classificado pelo nome ao criar; pode ser
+  /// trocado em Produtos → Categorias. É o filtro Peças/Equipamentos do
+  /// relatório de compras (16/11/2026).
+  kind       String   @default("PECA")
   createdAt  DateTime @default(now()) @map("created_at")
 
   company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)

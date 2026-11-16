@@ -81,6 +81,26 @@ export function arredondarSaldo(atual: number): number {
   return Math.max(1, Math.round(atual));
 }
 
+/** Peça (tubos, conexões, registros…) ou equipamento (boilers, bombas, placas…). */
+export type TipoItem = 'PECA' | 'EQUIPAMENTO';
+export const ROTULO_TIPO: Record<TipoItem, string> = { PECA: 'Peças', EQUIPAMENTO: 'Equipamentos' };
+
+const PALAVRAS_EQUIPAMENTO =
+  /(boiler|reservat|bomba|pressuriz|coletor|placa|painel|trocador|gerador|aquecedor|cilindro|inversor|motobomba|tanque|caixa d.?agua|equipamento|filtro.*piscina|rinnai)/;
+/** "Acessórios para coletor", "Conexões…", "Peças…", "Kit…", "Suporte…" são peças mesmo citando um equipamento. */
+const COMECA_COMO_PECA = /^\s*(acess|conex|pec|kit|suporte|fixa)/;
+const semAcento = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+
+/**
+ * Classifica pelo nome (de categoria ou de produto). É a mesma lista da
+ * migration que classificou as categorias existentes; a categoria manda e a
+ * pessoa pode corrigir em Produtos → Categorias.
+ */
+export function classificarPorNome(nome: string): TipoItem {
+  const n = semAcento(nome);
+  return PALAVRAS_EQUIPAMENTO.test(n) && !COMECA_COMO_PECA.test(n) ? 'EQUIPAMENTO' : 'PECA';
+}
+
 export type SituacaoCompra = 'ALERTA_COMPRA' | 'OK' | 'SEM_MINIMO';
 
 export interface LinhaCompra {
@@ -91,6 +111,8 @@ export interface LinhaCompra {
   size: string | null;
   categoria: string | null;
   fornecedor: string | null;
+  /** Peça ou equipamento — pela categoria; sem categoria, pelo nome do produto. */
+  tipo: TipoItem;
   /** Saldo em cada depósito, na ordem do código (DEP-1, DEP-2…). */
   depositos: { id: string; code: string; name: string; quantity: number }[];
   /** A soma dos depósitos — é este número que decide a compra. */
@@ -122,7 +144,7 @@ export async function posicaoCompra(companyId: string) {
     prisma.product.findMany({
       where: { companyId, active: true },
       include: {
-        category: { select: { name: true } },
+        category: { select: { name: true, kind: true } },
         supplier: { select: { name: true } },
         stockItems: { include: { warehouse: { select: { id: true, code: true, name: true } } } },
       },
@@ -178,6 +200,7 @@ export async function posicaoCompra(companyId: string) {
       size: p.size,
       categoria: p.category?.name ?? null,
       fornecedor: p.supplier?.name ?? null,
+      tipo: p.category ? (p.category.kind === 'EQUIPAMENTO' ? 'EQUIPAMENTO' : 'PECA') : classificarPorNome(p.name),
       depositos: porDeposito,
       total,
       minStock,
@@ -193,11 +216,28 @@ export async function posicaoCompra(companyId: string) {
     };
   });
 
+  return montarPosicao(itens, depositos);
+}
+
+export type Posicao = ReturnType<typeof montarPosicao>;
+
+/** Agregados (resumo, lista em alerta, por categoria/fornecedor/tipo) a partir das linhas. */
+export function montarPosicao(itens: LinhaCompra[], depositos: { id: string; code: string; name: string }[]) {
   const de = (s: SituacaoCompra) => itens.filter((i) => i.situacao === s);
   // Mais urgente primeiro: menor fração restante, depois maior valor a comprar.
   const alerta = de('ALERTA_COMPRA').sort((a, b) =>
     (a.fracaoRestante ?? 1) - (b.fracaoRestante ?? 1) || b.comprarParaRepor * b.custoMedio - a.comprarParaRepor * a.custoMedio);
   const semMinimo = de('SEM_MINIMO');
+  const porTipo = (['PECA', 'EQUIPAMENTO'] as TipoItem[]).map((tipo) => {
+    const lista = alerta.filter((i) => i.tipo === tipo);
+    return {
+      tipo,
+      produtos: itens.filter((i) => i.tipo === tipo).length,
+      itensParaComprar: lista.length,
+      zerados: lista.filter((i) => i.urgencia === 'ZERADO').length,
+      valor: Number(lista.reduce((a, i) => a + i.comprarParaRepor * i.custoMedio, 0).toFixed(2)),
+    };
+  });
 
   return {
     depositos,
@@ -219,7 +259,14 @@ export async function posicaoCompra(companyId: string) {
     semMinimo,
     porCategoria: porCategoria(itens),
     porFornecedor: porFornecedor(itens),
+    porTipo,
   };
+}
+
+/** Mesma posição, só com as linhas de um tipo (peças ou equipamentos) — para as extrações filtradas. */
+export function filtrarPorTipo(posicao: Posicao, tipo?: TipoItem | null): Posicao {
+  if (!tipo) return posicao;
+  return montarPosicao(posicao.itens.filter((i) => i.tipo === tipo), posicao.depositos);
 }
 
 /** Agrupamento por categoria — uma das visões do relatório. */

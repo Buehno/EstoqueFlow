@@ -1,15 +1,15 @@
 import { useEffect, useState } from 'react';
-import { BookOpen, Fingerprint, Package, Plus, Ruler, Search, Trash2, Upload } from 'lucide-react';
-import { api, ApiError, type Product } from '../lib/api';
+import { BookOpen, Fingerprint, Package, Plus, Ruler, Search, Tags, Trash2, Upload } from 'lucide-react';
+import { api, ApiError, type Categoria, type Product, type TipoItem } from '../lib/api';
 import { Badge, brl, Card, Empty, Field, Input, Modal, qty, Select, Spinner, Table, useToast } from '../lib/ui';
 import { useAuth } from '../App';
 
 export default function Produtos() {
   const [items, setItems] = useState<Product[]>([]);
-  const [cats, setCats] = useState<{ id: string; name: string }[]>([]);
+  const [cats, setCats] = useState<Categoria[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [modal, setModal] = useState<'novo' | 'lote' | null>(null);
+  const [modal, setModal] = useState<'novo' | 'lote' | 'categorias' | null>(null);
   const [editing, setEditing] = useState<Product | null>(null);
   const [carregandoTabelas, setCarregandoTabelas] = useState(false);
   const [aplicandoEmbalagens, setAplicandoEmbalagens] = useState(false);
@@ -87,8 +87,18 @@ export default function Produtos() {
 
   useEffect(() => {
     void load();
-    api.get<{ id: string; name: string }[]>('/categories').then(setCats);
+    api.get<Categoria[]>('/categories').then(setCats);
   }, []);
+
+  /** Peça × equipamento por categoria — é o filtro do relatório de compras. */
+  const mudarTipoCategoria = async (c: Categoria, kind: TipoItem) => {
+    try {
+      await api.patch(`/categories/${c.id}`, { kind });
+      setCats((lista) => lista.map((x) => (x.id === c.id ? { ...x, kind } : x)));
+    } catch (err) {
+      toast({ kind: 'err', title: 'Não foi possível alterar a categoria', body: err instanceof ApiError ? err.message : undefined });
+    }
+  };
 
   useEffect(() => {
     const t = setTimeout(() => void load(search), 320);
@@ -184,6 +194,11 @@ export default function Produtos() {
           {podeCarregarTabelas && (
             <button onClick={() => void carregarTabelasFornecedores()} disabled={carregandoTabelas} className="btn-ghost btn-sm gap-2" title="SOLIS, SYLLENT, INOVA, THOLZ (e SODRAMAR 2015/2016, desatualizada): cria ou atualiza os produtos com preço parcelado e à vista">
               <BookOpen size={15} /> {carregandoTabelas ? 'Carregando…' : 'Carregar tabelas de fornecedores'}
+            </button>
+          )}
+          {podeCarregarTabelas && (
+            <button onClick={() => setModal('categorias')} className="btn-ghost btn-sm gap-2" title="Diz o que é peça e o que é equipamento (filtro do relatório de compras) e o prefixo do ID único">
+              <Tags size={15} /> Categorias
             </button>
           )}
           <button onClick={() => setModal('lote')} className="btn-ghost btn-sm gap-2">
@@ -347,6 +362,33 @@ export default function Produtos() {
               <button type="button" onClick={remover} className="btn-danger">Excluir de vez</button>
             </div>
           </div>
+        )}
+      </Modal>
+
+      <Modal open={modal === 'categorias'} onClose={() => setModal(null)} title="Categorias — peça ou equipamento" wide>
+        <p className="mb-4 text-[13.5px] leading-relaxed text-muted">
+          O relatório de compras filtra <b className="text-ink">Peças</b> (tubos, conexões, registros…) e <b className="text-ink">Equipamentos</b> (boilers, bombas, placas, aquecedores…) pela categoria do produto.
+          A classificação inicial foi feita pelo nome; corrija aqui o que estiver errado. Produto sem categoria é classificado pelo próprio nome.
+        </p>
+        {cats.length === 0 ? <Empty title="Nenhuma categoria" body="As categorias nascem na importação das planilhas e das tabelas de fornecedor." /> : (
+          <ul className="divide-y divide-line">
+            {cats.map((c) => (
+              <li key={c.id} className="flex flex-wrap items-center gap-3 py-2.5">
+                <div className="min-w-0 flex-1 basis-[220px]">
+                  <p className="text-[14px] font-medium">{c.name}</p>
+                  <p className="font-mono text-[11.5px] text-faint">{c.codePrefix ? `${c.codePrefix}-… · ` : ''}{c.produtos} produto(s)</p>
+                </div>
+                <div role="radiogroup" aria-label={`Tipo da categoria ${c.name}`} className="flex gap-1">
+                  {(['PECA', 'EQUIPAMENTO'] as TipoItem[]).map((t) => (
+                    <button key={t} role="radio" aria-checked={c.kind === t} onClick={() => c.kind !== t && void mudarTipoCategoria(c, t)}
+                      className={c.kind === t ? 'chip bg-brand/15 text-brand' : 'chip bg-line/60 text-muted hover:text-ink'}>
+                      {t === 'PECA' ? 'Peça' : 'Equipamento'}
+                    </button>
+                  ))}
+                </div>
+              </li>
+            ))}
+          </ul>
         )}
       </Modal>
 

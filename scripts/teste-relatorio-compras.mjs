@@ -124,6 +124,36 @@ async function main() {
   await req('PATCH', `/auth/users/${op.data.id}`, { permissionOverrides: { VER_ALERTAS: true } }, tk);
   check('com "ver alertas" ligado, extrai', (await req('GET', '/reports/compras/extrair?formato=csv', undefined, tr.data.token)).status === 200);
 
+  // ── peças × equipamentos (16/11): classificação pela categoria, filtro nas extrações, ajuste manual ──
+  const por2 = Object.fromEntries((await req('GET', '/reports/compras', undefined, tk)).data.itens.map((i) => [i.productId, i]));
+  check('categoria "Boilers" nasce como EQUIPAMENTO e "Tubos" como PECA; item sem categoria vai pelo nome', por2[zerado.id].tipo === 'EQUIPAMENTO' && por2[critico.id].tipo === 'PECA' && por2[semSug.id].tipo === 'PECA', [por2[zerado.id].tipo, por2[critico.id].tipo, por2[semSug.id].tipo]);
+  const cats = (await req('GET', '/categories', undefined, tk)).data;
+  check('GET /categories traz kind e contagem de produtos', cats.find((c) => c.name === 'Boilers')?.kind === 'EQUIPAMENTO' && cats.find((c) => c.name === 'Tubos')?.produtos === 4, cats.map((c) => [c.name, c.kind, c.produtos]));
+  const c3 = (await req('GET', '/reports/compras', undefined, tk)).data;
+  check('resumo por tipo: 1 equipamento (boiler, zerado) e 3 peças em alerta', c3.porTipo.find((t) => t.tipo === 'EQUIPAMENTO')?.itensParaComprar === 1 && c3.porTipo.find((t) => t.tipo === 'EQUIPAMENTO')?.zerados === 1 && c3.porTipo.find((t) => t.tipo === 'PECA')?.itensParaComprar === 3, c3.porTipo);
+  r = await req('GET', '/reports/compras/extrair?formato=csv&tipo=EQUIPAMENTO', undefined, tk);
+  const linhasCsvTipo = (r.buf ? r.buf.toString('utf8') : r.data).replace(/^\uFEFF/, '').split('\n');
+  check('CSV só de equipamentos: coluna tipo + só o boiler', linhasCsvTipo[0].includes(';tipo;') && linhasCsvTipo.length === 2 && /Boiler 200 L/.test(linhasCsvTipo[1]) && /;equipamento;/.test(linhasCsvTipo[1]), linhasCsvTipo);
+  r = await req('GET', '/reports/compras/extrair?formato=xlsx&tipo=PECA', undefined, tk);
+  check('Excel só de peças baixa com "pecas" no nome', r.status === 200 && /relatorio-de-compras-pecas-/.test(r.cd), r.cd);
+  const wb3 = new ExcelJS.Workbook(); await wb3.xlsx.load(r.buf);
+  const lista3 = []; wb3.getWorksheet('Lista de compra').eachRow((row, n) => { if (n >= 5 && typeof row.getCell(3).value === 'string' && !/item\(ns\)/.test(row.getCell(3).value)) lista3.push(row.getCell(3).value); });
+  check('aba Lista (só peças) tem os 3 itens e não tem o boiler', lista3.length === 3 && !lista3.some((n) => /Boiler/.test(n)), lista3);
+  r = await req('GET', '/reports/compras/extrair?formato=pdf&tipo=EQUIPAMENTO', undefined, tk);
+  const txt3 = await textoPdf(r.buf);
+  if (txt3) check('PDF só de equipamentos diz "só equipamentos" e lista 1 item', /só equipamentos/.test(txt3) && /1\s+item\(ns\) para comprar/.test(txt3.replace(/\n/g, ' ')), txt3.slice(0, 300));
+  const tubosCat = cats.find((c) => c.name === 'Tubos');
+  r = await req('PATCH', `/categories/${tubosCat.id}`, { kind: 'EQUIPAMENTO' }, tk);
+  check('PATCH /categories/:id troca para EQUIPAMENTO', r.status === 200 && r.data.kind === 'EQUIPAMENTO', r.data);
+  const c4 = (await req('GET', '/reports/compras', undefined, tk)).data;
+  check('depois da troca, os 3 itens da categoria Tubos passam a contar como equipamento (4 no total)', c4.porTipo.find((t) => t.tipo === 'EQUIPAMENTO')?.itensParaComprar === 4 && c4.itens.find((i) => i.productId === critico.id).tipo === 'EQUIPAMENTO', c4.porTipo);
+  r = await req('PATCH', `/categories/${tubosCat.id}`, { kind: 'BANANA' }, tk);
+  check('kind inválido é recusado (422)', r.status === 422);
+  r = await req('POST', '/categories', { name: 'Acessórios para coletor' }, tk);
+  check('"Acessórios para coletor" nasce como PECA mesmo citando coletor', r.data.kind === 'PECA', r.data);
+  r = await req('POST', '/categories', { name: 'Bombas e pressurizadores' }, tk);
+  check('"Bombas e pressurizadores" nasce como EQUIPAMENTO', r.data.kind === 'EQUIPAMENTO', r.data);
+
   console.log(`\n${passou} passaram, ${falhou} falharam`);
   if (falhas.length) { console.log('Falhas:', falhas); process.exit(1); }
 }

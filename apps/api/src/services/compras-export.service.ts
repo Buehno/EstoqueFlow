@@ -16,7 +16,7 @@
  */
 import ExcelJS from 'exceljs';
 import type { Content, TableCell, TDocumentDefinitions } from 'pdfmake/interfaces.js';
-import type { LinhaCompra, posicaoCompra } from './compras.service.js';
+import { ROTULO_TIPO, type LinhaCompra, type posicaoCompra, type TipoItem } from './compras.service.js';
 import { pdfMake, registrarFontes } from './proposal-export.service.js';
 
 export type Posicao = Awaited<ReturnType<typeof posicaoCompra>>;
@@ -78,6 +78,7 @@ function abaItens(
     { header: 'Produto', width: 46 },
     { header: 'Un.', width: 6 },
     { header: 'Categoria', width: 18 },
+    { header: 'Tipo', width: 13 },
     { header: 'Fornecedor', width: 22 },
     ...posicao.depositos.map((d) => ({ header: d.code, width: 9 })),
     { header: 'TOTAL', width: 10 },
@@ -102,19 +103,19 @@ function abaItens(
     ws.getCell(5, 1).font = { name: 'Calibri', italic: true, size: 11 };
   }
   let linha = cab;
-  const colComprar = 6 + posicao.depositos.length + 4;
+  const colComprar = 7 + posicao.depositos.length + 4;
   for (const i of itens) {
     linha += 1;
     const row = ws.getRow(linha);
     row.values = [
       opcoes.comSituacao ? ROTULO_SITUACAO[i.situacao] : ROTULO_URGENCIA[i.urgencia ?? ''] ?? '',
-      i.sku, i.name, i.unit, i.categoria ?? '', i.fornecedor ?? '',
+      i.sku, i.name, i.unit, i.categoria ?? '', i.tipo === 'EQUIPAMENTO' ? 'Equipamento' : 'Peça', i.fornecedor ?? '',
       ...posicao.depositos.map((d) => i.depositos.find((x) => x.id === d.id)?.quantity ?? 0),
       i.total, i.minStock, i.fracaoRestante ?? '', i.pontoCompra, i.comprarParaRepor, i.custoMedio, valorCompra(i), i.saidas90, i.coberturaDias ?? '',
     ];
     row.eachCell((c, col) => {
       c.font = { name: 'Calibri', size: 11 };
-      c.alignment = { vertical: 'middle', horizontal: col <= 6 ? 'left' : 'right', wrapText: col === 3 };
+      c.alignment = { vertical: 'middle', horizontal: col <= 7 ? 'left' : 'right', wrapText: col === 3 };
       c.border = { top: BORDA, bottom: BORDA, left: BORDA, right: BORDA };
     });
     row.getCell(3).font = { name: 'Calibri', size: 11, bold: true };
@@ -238,18 +239,19 @@ function abaResumo(wb: ExcelJS.Workbook, posicao: Posicao, empresa: string, hoje
  * Pasta de trabalho completa; com `fornecedor`, só a lista daquele fornecedor
  * (uma aba, pronta para mandar como pedido).
  */
-export async function gerarRelatorioCompras(posicao: Posicao, empresa: string, fornecedor?: string | null): Promise<Buffer> {
+export async function gerarRelatorioCompras(posicao: Posicao, empresa: string, fornecedor?: string | null, tipo?: TipoItem | null): Promise<Buffer> {
   const hoje = new Date();
   const wb = new ExcelJS.Workbook();
   wb.creator = empresa; wb.created = hoje;
-  const sub = `${empresa} · ${hoje.toLocaleString('pt-BR')} · regra: total dos depósitos ≤ 50% do estoque sugerido entra na lista`;
+  const soTipo = tipo ? ` · só ${ROTULO_TIPO[tipo].toLowerCase()}` : '';
+  const sub = `${empresa} · ${hoje.toLocaleString('pt-BR')}${soTipo} · regra: total dos depósitos ≤ 50% do estoque sugerido entra na lista`;
 
   if (fornecedor) {
     const itens = listaDoFornecedor(posicao, fornecedor);
-    abaItens(wb, 'Pedido', posicao, itens, { tituloAba: `Pedido de compra — ${fornecedor}`, sub, vazio: 'Nenhum item deste fornecedor em alerta.' });
+    abaItens(wb, 'Pedido', posicao, itens, { tituloAba: `Pedido de compra — ${fornecedor}${soTipo}`, sub, vazio: 'Nenhum item deste fornecedor em alerta.' });
   } else {
     abaResumo(wb, posicao, empresa, hoje);
-    abaItens(wb, 'Lista de compra', posicao, posicao.alerta, { tituloAba: 'Lista de compra — itens que atingiram 50% do estoque sugerido', sub, vazio: 'Nenhum item atingiu o ponto de compra — nada a repor agora.' });
+    abaItens(wb, 'Lista de compra', posicao, posicao.alerta, { tituloAba: `Lista de compra — itens que atingiram 50% do estoque sugerido${soTipo}`, sub, vazio: 'Nenhum item atingiu o ponto de compra — nada a repor agora.' });
     abaPorFornecedor(wb, posicao, sub);
     abaPorCategoria(wb, posicao, sub);
     abaItens(wb, 'Todos os produtos', posicao, posicao.itens, { tituloAba: 'Posição de todos os produtos', sub, comSituacao: true, vazio: 'Nenhum produto ativo.' });
@@ -264,9 +266,9 @@ export async function gerarRelatorioCompras(posicao: Posicao, empresa: string, f
 export function gerarCsvCompras(posicao: Posicao, fornecedor?: string | null): string {
   const itens = listaDoFornecedor(posicao, fornecedor);
   const esc = (v: unknown) => { const s = String(v ?? ''); return /[";\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-  const header = ['urgencia', 'codigo', 'produto', 'unidade', 'categoria', 'fornecedor', ...posicao.depositos.map((d) => d.code), 'total', 'estoque_sugerido', 'pct_do_sugerido', 'dispara_em', 'comprar', 'custo_medio', 'valor_estimado', 'saidas_90d', 'cobertura_dias'];
+  const header = ['urgencia', 'codigo', 'produto', 'unidade', 'categoria', 'tipo', 'fornecedor', ...posicao.depositos.map((d) => d.code), 'total', 'estoque_sugerido', 'pct_do_sugerido', 'dispara_em', 'comprar', 'custo_medio', 'valor_estimado', 'saidas_90d', 'cobertura_dias'];
   const rows = itens.map((i) => [
-    i.urgencia ?? '', i.sku, i.name, i.unit, i.categoria ?? '', i.fornecedor ?? '',
+    i.urgencia ?? '', i.sku, i.name, i.unit, i.categoria ?? '', i.tipo === 'EQUIPAMENTO' ? 'equipamento' : 'peca', i.fornecedor ?? '',
     ...posicao.depositos.map((d) => i.depositos.find((x) => x.id === d.id)?.quantity ?? 0),
     i.total, i.minStock, i.fracaoRestante == null ? '' : Math.round(i.fracaoRestante * 100), i.pontoCompra, i.comprarParaRepor,
     i.custoMedio, valorCompra(i), i.saidas90, i.coberturaDias ?? '',
@@ -280,7 +282,7 @@ export function gerarCsvCompras(posicao: Posicao, fornecedor?: string | null): s
  * Lista de compra em PDF — para imprimir ou mandar no WhatsApp do
  * fornecedor. Com `fornecedor`, vira o pedido daquele fornecedor.
  */
-export async function gerarPdfCompras(posicao: Posicao, empresa: string, fornecedor?: string | null): Promise<Buffer> {
+export async function gerarPdfCompras(posicao: Posicao, empresa: string, fornecedor?: string | null, tipo?: TipoItem | null): Promise<Buffer> {
   registrarFontes();
   const hoje = new Date();
   const itens = listaDoFornecedor(posicao, fornecedor);
@@ -312,7 +314,7 @@ export async function gerarPdfCompras(posicao: Posicao, empresa: string, fornece
   });
 
   const content: Content[] = [
-    { text: fornecedor ? `Pedido de compra — ${fornecedor}` : 'Lista de compra', fontSize: 16, bold: true },
+    { text: `${fornecedor ? `Pedido de compra — ${fornecedor}` : 'Lista de compra'}${tipo ? ` · só ${ROTULO_TIPO[tipo].toLowerCase()}` : ''}`, fontSize: 16, bold: true },
     { text: `${empresa} · ${hoje.toLocaleString('pt-BR')}`, fontSize: 9, color: '#555555', margin: [0, 2, 0, 2] },
     { text: 'Regra: o item entra quando o total dos depósitos chega a 50% do estoque sugerido; a coluna COMPRAR é o que falta para voltar ao sugerido.', fontSize: 8, color: '#555555', margin: [0, 0, 0, 8] },
     {

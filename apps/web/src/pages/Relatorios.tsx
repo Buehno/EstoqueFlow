@@ -3,8 +3,8 @@ import { AlertTriangle, Copy, Download, FileSpreadsheet, FileText, PackageX, Plu
 import { Link } from 'react-router-dom';
 import { Bar, BarChart, CartesianGrid, Cell, LabelList, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import {
-  api, ApiError,
-  type Fracionados, type GrupoDuplicado, type LinhaCompra, type PosicaoCompra, type ProdutoEmListas, type SaldoQuebrado, type StockRow,
+  api, ApiError, ROTULO_TIPO,
+  type Fracionados, type GrupoDuplicado, type LinhaCompra, type PosicaoCompra, type ProdutoEmListas, type SaldoQuebrado, type StockRow, type TipoItem,
 } from '../lib/api';
 import { carrinho, useCarrinho } from '../lib/carrinho';
 import CarrinhoCompra from '../components/CarrinhoCompra';
@@ -41,6 +41,8 @@ export default function Relatorios() {
   const itensCarrinho = useCarrinho();
   const [filtroCompra, setFiltroCompra] = useState<'alerta' | 'semMinimo' | 'todos'>('alerta');
   const [fornecedorSel, setFornecedorSel] = useState<string>('');
+  /** Peças × equipamentos (16/11): vale para a lista, o "Adicionar todos" e as extrações. */
+  const [tipoSel, setTipoSel] = useState<'' | TipoItem>('');
   const [menuExportar, setMenuExportar] = useState(false);
   const [loading, setLoading] = useState(true);
   const [ocupado, setOcupado] = useState(false);
@@ -79,7 +81,10 @@ export default function Relatorios() {
     filtroCompra === 'alerta' ? compras.alerta
       : filtroCompra === 'semMinimo' ? compras.semMinimo
       : compras.itens;
-  const listaCompra = fornecedorSel ? base.filter((i) => (i.fornecedor ?? '(sem fornecedor cadastrado)') === fornecedorSel) : base;
+  const porTipoBase = { PECA: base.filter((i) => i.tipo === 'PECA').length, EQUIPAMENTO: base.filter((i) => i.tipo === 'EQUIPAMENTO').length };
+  const listaCompra = base
+    .filter((i) => !fornecedorSel || (i.fornecedor ?? '(sem fornecedor cadastrado)') === fornecedorSel)
+    .filter((i) => !tipoSel || i.tipo === tipoSel);
   const valorLista = listaCompra.reduce((a, i) => a + i.comprarParaRepor * i.custoMedio, 0);
 
   /** Carrinho de compra: cada linha do relatório vira um item com a quantidade que falta para o sugerido. */
@@ -92,16 +97,18 @@ export default function Relatorios() {
   const adicionarTodos = () => {
     const novos = listaCompra.filter((r) => r.comprarParaRepor > 0 && !noCarrinho.has(r.productId));
     carrinho.adicionarVarios(novos.map(paraCarrinho));
-    toast({ kind: 'ok', title: `${novos.length} item(ns) no carrinho`, body: fornecedorSel ? `Só ${fornecedorSel}.` : undefined });
+    toast({ kind: 'ok', title: `${novos.length} item(ns) no carrinho`, body: [tipoSel && `só ${ROTULO_TIPO[tipoSel].toLowerCase()}`, fornecedorSel && `só ${fornecedorSel}`].filter(Boolean).join(' · ') || undefined });
   };
 
   /** Extrai o relatório de compras: Excel completo, PDF ou CSV — da lista inteira ou só do fornecedor filtrado. */
   const extrairCompras = (formato: 'xlsx' | 'pdf' | 'csv', soFornecedor = false) => {
     const hoje = new Date().toISOString().slice(0, 10);
     const forn = soFornecedor && fornecedorSel ? `&fornecedor=${encodeURIComponent(fornecedorSel)}` : '';
-    const nome = soFornecedor && fornecedorSel ? `pedido-de-compra-${hoje}.${formato}` : `relatorio-de-compras-${hoje}.${formato}`;
+    const tipo = tipoSel ? `&tipo=${tipoSel}` : '';
+    const sufixoTipo = tipoSel ? `-${ROTULO_TIPO[tipoSel].toLowerCase()}` : '';
+    const nome = soFornecedor && fornecedorSel ? `pedido-de-compra${sufixoTipo}-${hoje}.${formato}` : `relatorio-de-compras${sufixoTipo}-${hoje}.${formato}`;
     setMenuExportar(false);
-    return api.download(`/reports/compras/extrair?formato=${formato}${forn}`, nome);
+    return api.download(`/reports/compras/extrair?formato=${formato}${forn}${tipo}`, nome);
   };
 
   const exportar = () => {
@@ -169,7 +176,7 @@ export default function Relatorios() {
           </button>
           {aba === 'compras' && menuExportar && (
             <div role="menu" className="absolute right-0 z-30 mt-2 w-[300px] rounded-xl border border-line bg-raised p-1.5 shadow-pop">
-              <p className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-faint">Lista de compra completa</p>
+              <p className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-faint">{tipoSel ? `Lista de compra · só ${ROTULO_TIPO[tipoSel].toLowerCase()}` : 'Lista de compra completa'}</p>
               <button role="menuitem" onClick={() => void extrairCompras('xlsx')} className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[13.5px] hover:bg-line/50"><FileSpreadsheet size={15} /> Excel completo <span className="ml-auto text-[11px] text-faint">6 abas</span></button>
               <button role="menuitem" onClick={() => void extrairCompras('pdf')} className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[13.5px] hover:bg-line/50"><FileText size={15} /> PDF para imprimir / WhatsApp</button>
               <button role="menuitem" onClick={() => void extrairCompras('csv')} className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[13.5px] hover:bg-line/50"><Download size={15} /> CSV</button>
@@ -309,7 +316,7 @@ export default function Relatorios() {
           <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
           <Card
             title="Lista de compra"
-            subtitle={`Regra: estoque sugerido é a quantidade que deve haver; quando o total dos depósitos chega a 50% dele, o item entra aqui com o que falta para voltar ao sugerido.${fornecedorSel ? ` · Filtrando: ${fornecedorSel}` : ''}`}
+            subtitle={`Regra: estoque sugerido é a quantidade que deve haver; quando o total dos depósitos chega a 50% dele, o item entra aqui com o que falta para voltar ao sugerido.${tipoSel ? ` · Só ${ROTULO_TIPO[tipoSel].toLowerCase()}` : ''}${fornecedorSel ? ` · Filtrando: ${fornecedorSel}` : ''}`}
             action={
               <div className="flex flex-wrap items-center gap-1.5">
                 {([
@@ -318,6 +325,10 @@ export default function Relatorios() {
                   ['todos', `Todos (${compras.resumo.produtos})`],
                 ] as const).map(([k, label]) => (
                   <button key={k} onClick={() => setFiltroCompra(k)} aria-pressed={filtroCompra === k} className={cx('chip', filtroCompra === k ? 'bg-brand/15 text-brand' : 'bg-line/60 text-muted')}>{label}</button>
+                ))}
+                <span className="mx-1 h-5 w-px bg-line" aria-hidden />
+                {(['PECA', 'EQUIPAMENTO'] as TipoItem[]).map((t) => (
+                  <button key={t} onClick={() => setTipoSel((a) => (a === t ? '' : t))} aria-pressed={tipoSel === t} className={cx('chip', tipoSel === t ? 'bg-brand/15 text-brand' : 'bg-line/60 text-muted')}>{ROTULO_TIPO[t]} ({porTipoBase[t]})</button>
                 ))}
                 <select value={fornecedorSel} onChange={(e) => setFornecedorSel(e.target.value)} className="field field-sm ml-1 w-[200px]" aria-label="Filtrar por fornecedor">
                   <option value="">Todos os fornecedores</option>
@@ -352,7 +363,7 @@ export default function Relatorios() {
                 { key: 'p', header: 'Produto', render: (r) => (
                   <div>
                     <p className="font-medium">{r.name}</p>
-                    <p className="font-mono text-[11.5px] text-faint">{r.sku}{r.categoria ? ` · ${r.categoria}` : ''}{r.fornecedor ? ` · ${r.fornecedor}` : ''}</p>
+                    <p className="font-mono text-[11.5px] text-faint">{r.sku}{r.categoria ? ` · ${r.categoria}` : ''}{r.fornecedor ? ` · ${r.fornecedor}` : ''}{r.tipo === 'EQUIPAMENTO' ? ' · equipamento' : ''}</p>
                   </div>
                 ) },
                 ...compras.depositos.map((d) => ({
@@ -381,7 +392,7 @@ export default function Relatorios() {
               </p>
             )}
             <p className="mt-3 text-[12.5px] text-faint">
-              <b>Adicionar</b> leva o item para o carrinho ao lado com a quantidade que falta; o carrinho vira uma lista de compra salva, com status até a mercadoria chegar. <b>Extrair relatório</b> (no topo) baixa a lista em Excel, PDF ou CSV.
+              <b>Adicionar</b> leva o item para o carrinho ao lado com a quantidade que falta; o carrinho vira uma lista de compra salva, com status até a mercadoria chegar. <b>Extrair relatório</b> (no topo) baixa a lista em Excel, PDF ou CSV, respeitando o filtro Peças/Equipamentos. O que é peça ou equipamento vem da categoria — ajuste em Produtos → Categorias.
             </p>
           </Card>
           <Card

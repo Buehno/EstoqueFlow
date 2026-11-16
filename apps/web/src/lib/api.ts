@@ -119,11 +119,15 @@ export interface MovementRow {
   reason: string | null; document: string | null; notes: string | null; user: string; createdAt: string;
 }
 export type SituacaoCompra = 'ALERTA_COMPRA' | 'OK' | 'SEM_MINIMO';
+/** Peça (tubos, conexões, registros…) ou equipamento (boilers, bombas, placas…). */
+export type TipoItem = 'PECA' | 'EQUIPAMENTO';
+export const ROTULO_TIPO: Record<TipoItem, string> = { PECA: 'Peças', EQUIPAMENTO: 'Equipamentos' };
+export interface Categoria { id: string; name: string; color: string | null; codePrefix: string | null; kind: TipoItem; produtos: number }
 
 /** Linha do relatório de reposição — sempre pelo total somado dos depósitos. */
 export interface LinhaCompra {
   productId: string; sku: string; name: string; unit: string; size: string | null;
-  categoria: string | null; fornecedor: string | null;
+  categoria: string | null; fornecedor: string | null; tipo: TipoItem;
   depositos: { id: string; code: string; name: string; quantity: number }[];
   total: number; minStock: number; pontoCompra: number;
   situacao: SituacaoCompra; comprarParaRepor: number;
@@ -142,6 +146,7 @@ export interface PosicaoCompra {
   alerta: LinhaCompra[]; semMinimo: LinhaCompra[];
   porCategoria: { categoria: string; produtos: number; alerta: number; total: number; valor: number; comprar: number }[];
   porFornecedor: { fornecedor: string; itensParaComprar: number; valor: number; zerados: number }[];
+  porTipo: { tipo: TipoItem; produtos: number; itensParaComprar: number; zerados: number; valor: number }[];
 }
 // ─── Listas de compra (carrinho do comprador, 16/11) ───
 export type StatusLista = 'ABERTA' | 'PEDIDA' | 'COMPRADA' | 'CANCELADA';
